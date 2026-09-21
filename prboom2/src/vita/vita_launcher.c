@@ -83,22 +83,60 @@ static uint32_t Vita_LauncherPackRGBA(
          (uint32_t)r;
 }
 
+static const char *Vita_LauncherDisplayErrorName(int result)
+{
+  switch ((uint32_t)result)
+  {
+    case SCE_DISPLAY_ERROR_INVALID_HEAD:
+      return "INVALID_HEAD";
+    case SCE_DISPLAY_ERROR_INVALID_VALUE:
+      return "INVALID_VALUE";
+    case SCE_DISPLAY_ERROR_INVALID_ADDR:
+      return "INVALID_ADDR";
+    case SCE_DISPLAY_ERROR_INVALID_PIXELFORMAT:
+      return "INVALID_PIXELFORMAT";
+    case SCE_DISPLAY_ERROR_INVALID_PITCH:
+      return "INVALID_PITCH";
+    case SCE_DISPLAY_ERROR_INVALID_RESOLUTION:
+      return "INVALID_RESOLUTION";
+    case SCE_DISPLAY_ERROR_INVALID_UPDATETIMING:
+      return "INVALID_UPDATETIMING";
+    case SCE_DISPLAY_ERROR_NO_FRAME_BUFFER:
+      return "NO_FRAME_BUFFER";
+    case SCE_DISPLAY_ERROR_NO_PIXEL_DATA:
+      return "NO_PIXEL_DATA";
+    case SCE_DISPLAY_ERROR_NO_OUTPUT_SIGNAL:
+      return "NO_OUTPUT_SIGNAL";
+    default:
+      return "UNKNOWN";
+  }
+}
+
 static int Vita_LauncherInitFramebuffer(void)
 {
   const size_t raw_size =
     (size_t)VITA_DISPLAY_WIDTH * VITA_DISPLAY_HEIGHT * sizeof(uint32_t);
   const size_t alloc_size =
     Vita_LauncherAlignUp(raw_size, LAUNCHER_FB_ALIGNMENT);
+  SceKernelAllocMemBlockOpt alloc_opt;
   SceDisplayFrameBuf fb;
+  SceDisplayFrameBuf active_fb;
+  int display_result;
+  int wait_result;
 
   if (launcher_fb_pixels)
     return 1;
+
+  memset(&alloc_opt, 0, sizeof(alloc_opt));
+  alloc_opt.size = sizeof(alloc_opt);
+  alloc_opt.attr = SCE_KERNEL_ALLOC_MEMBLOCK_ATTR_HAS_ALIGNMENT;
+  alloc_opt.alignment = LAUNCHER_FB_ALIGNMENT;
 
   launcher_fb_uid = sceKernelAllocMemBlock(
     "dsda_launcher_fb",
     SCE_KERNEL_MEMBLOCK_TYPE_USER_CDRAM_RW,
     (SceSize)alloc_size,
-    NULL
+    &alloc_opt
   );
   if (launcher_fb_uid < 0)
   {
@@ -129,13 +167,79 @@ static int Vita_LauncherInitFramebuffer(void)
   fb.width = VITA_DISPLAY_WIDTH;
   fb.height = VITA_DISPLAY_HEIGHT;
 
-  if (sceDisplaySetFrameBuf(&fb, SCE_DISPLAY_SETBUF_IMMEDIATE) < 0)
+  Vita_Log(
+    "[VITA] launcher framebuffer candidate: base=%p size=%u align=0x%x pitch=%u\n",
+    (void *)launcher_fb_pixels,
+    (unsigned int)alloc_size,
+    (unsigned int)LAUNCHER_FB_ALIGNMENT,
+    (unsigned int)fb.pitch
+  );
+
+  /*
+   * Queue the framebuffer for the next display frame. This is the path used
+   * by SDL Vita, VitaSDK GXM samples and mature Vita renderers. IMMEDIATE can
+   * be rejected depending on the display's current scanout/update state even
+   * when the framebuffer itself is valid.
+   */
+  display_result =
+    sceDisplaySetFrameBuf(&fb, SCE_DISPLAY_SETBUF_NEXTFRAME);
+
+  if (display_result < 0)
   {
-    Vita_Log("[VITA] launcher: sceDisplaySetFrameBuf failed\n");
-    sceKernelFreeMemBlock(launcher_fb_uid);
-    launcher_fb_uid = -1;
-    launcher_fb_pixels = NULL;
-    return 0;
+    Vita_Log(
+      "[VITA] launcher: SetFrameBuf NEXTFRAME failed: 0x%08x (%s)\n",
+      (unsigned int)display_result,
+      Vita_LauncherDisplayErrorName(display_result)
+    );
+
+    /*
+     * Keep IMMEDIATE only as a diagnostic fallback. If both fail, the log now
+     * tells us whether the problem is address, pitch, resolution or timing.
+     */
+    display_result =
+      sceDisplaySetFrameBuf(&fb, SCE_DISPLAY_SETBUF_IMMEDIATE);
+
+    if (display_result < 0)
+    {
+      Vita_Log(
+        "[VITA] launcher: SetFrameBuf IMMEDIATE failed: 0x%08x (%s)\n",
+        (unsigned int)display_result,
+        Vita_LauncherDisplayErrorName(display_result)
+      );
+      sceKernelFreeMemBlock(launcher_fb_uid);
+      launcher_fb_uid = -1;
+      launcher_fb_pixels = NULL;
+      return 0;
+    }
+
+    Vita_Log("[VITA] launcher: IMMEDIATE fallback accepted\n");
+  }
+  else
+  {
+    wait_result = sceDisplayWaitSetFrameBuf();
+    if (wait_result < 0)
+    {
+      Vita_Log(
+        "[VITA] launcher: WaitSetFrameBuf returned 0x%08x\n",
+        (unsigned int)wait_result
+      );
+      sceDisplayWaitVblankStart();
+    }
+  }
+
+  memset(&active_fb, 0, sizeof(active_fb));
+  active_fb.size = sizeof(active_fb);
+
+  if (sceDisplayGetFrameBuf(&active_fb, SCE_DISPLAY_SETBUF_IMMEDIATE) >= 0)
+  {
+    Vita_Log(
+      "[VITA] launcher framebuffer active: base=%p pitch=%u %ux%u format=0x%08x\n",
+      active_fb.base,
+      active_fb.pitch,
+      active_fb.width,
+      active_fb.height,
+      active_fb.pixelformat
+    );
   }
 
   Vita_Log(
