@@ -1,0 +1,111 @@
+name: Vita build
+
+on:
+  push:
+    branches:
+      - vita-base
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vita-dsda-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-vita:
+    name: VitaSDK software renderer
+    runs-on: ubuntu-latest
+    container:
+      image: vitasdk/vitasdk:latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install host tools
+        shell: bash
+        run: |
+          apk add --no-cache build-base cmake git ninja pkgconf
+
+      - name: Install Vita dependencies
+        shell: bash
+        run: |
+          set -eux
+
+          if command -v vdpm >/dev/null 2>&1; then
+            VDPM=vdpm
+          else
+            git clone --depth 1 https://github.com/vitasdk/vdpm.git /tmp/vdpm
+            VDPM=/tmp/vdpm/vdpm
+          fi
+
+          "$VDPM" install \
+            zlib \
+            sdl2 \
+            sdl2_mixer \
+            libsndfile \
+            libzip \
+            vitaShaRK \
+            SceShaccCgExt \
+            taihen \
+            libmathneon
+
+      - name: Build pinned VitaGL
+        shell: bash
+        run: |
+          set -eux
+          git clone https://github.com/Rinnegatamante/vitaGL.git /tmp/vitaGL
+          cd /tmp/vitaGL
+          git checkout cd3791e29ff7f1c0ab349f12c7231f4871ce6a75
+          make \
+            ENABLE_LEGACY_PIPELINE=1 \
+            NO_SPLASHSCREEN=1 \
+            -j"$(nproc)"
+          make install
+
+      - name: Configure
+        shell: bash
+        run: |
+          cmake -S prboom2 -B build-vita -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DDSDA_ENABLE_OPENGL_RENDERER=OFF \
+            -DDSDA_VITA_PRESENT_VITAGL=ON \
+            -DWITH_IMAGE=OFF \
+            -DWITH_MAD=OFF \
+            -DWITH_FLUIDSYNTH=OFF \
+            -DWITH_PORTMIDI=OFF \
+            -DWITH_VORBISFILE=OFF \
+            -DWITH_XMP=OFF
+
+      - name: Build
+        shell: bash
+        run: cmake --build build-vita --parallel
+
+      - name: Collect artifacts
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p dist
+          for file in \
+            build-vita/vita-dsda-doom.vpk \
+            build-vita/eboot.bin \
+            build-vita/dsda-doom \
+            build-vita/dsda-doom.wad \
+            build-vita/CMakeCache.txt
+          do
+            if [ -f "$file" ]; then
+              cp "$file" dist/
+            fi
+          done
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vita-dsda-doom-${{ github.sha }}
+          path: dist/
+          if-no-files-found: warn
