@@ -361,10 +361,15 @@ static void Vita_LauncherDraw(
   Vita_LauncherIWADLabel(iwad_index, iwad_label, sizeof(iwad_label));
   Vita_LauncherPWADLabel(pwad_selector_index, pwad_label, sizeof(pwad_label));
 
-  Vita_LauncherSet2D();
-
+  /*
+   * In the pinned vitaGL revision glClear() is the operation that opens the
+   * first GXM scene for the frame. Calls such as glViewport() and
+   * glDisable(GL_CULL_FACE) reach sceGxm immediately, so they must not run
+   * before a scene exists.
+   */
   glClearColor(0.015f, 0.020f, 0.028f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT);
+  Vita_LauncherSet2D();
 
   Vita_LauncherDrawRect(0.0f, 0.0f, 960.0f, 105.0f, 0.04f, 0.13f, 0.20f, 1.0f);
   Vita_LauncherDrawText(

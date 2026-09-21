@@ -85,8 +85,12 @@ int Vita_VideoInit(void)
            resolution_fallback ? "resolution fallback used" : "native resolution accepted");
 
   vglWaitVblankStart(GL_TRUE);
-  Vita_Set2DState();
 
+  /*
+   * Do not submit viewport/depth/cull state here. The pinned vitaGL opens the
+   * first GXM scene lazily from glClear(), and these state calls would touch
+   * sceGxm before a scene exists.
+   */
   vita_video_initialized = 1;
   Vita_Log("[VITA] VitaGL initialized at %dx%d\n",
            VITA_DISPLAY_WIDTH, VITA_DISPLAY_HEIGHT);
@@ -231,8 +235,13 @@ void Vita_VideoPresent(const void *rgba_pixels, int pitch, int width, int height
     upload_pixels
   );
 
-  Vita_Set2DState();
+  /*
+   * glClear() performs vitaGL's scene_reset()/sceGxmBeginScene. Open the GXM
+   * scene before applying any state that maps directly to sceGxm.
+   */
+  glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT);
+  Vita_Set2DState();
 
   scale = (float)VITA_DISPLAY_WIDTH / (float)width;
   if ((float)height * scale > (float)VITA_DISPLAY_HEIGHT)
