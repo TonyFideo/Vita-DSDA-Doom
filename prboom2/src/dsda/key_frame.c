@@ -48,6 +48,19 @@
 #include "dsda/settings.h"
 #include "dsda/time.h"
 
+#ifdef __vita__
+#include "vita/vita_system.h"
+
+/*
+ * DSDA's desktop defaults keep one automatic rewind snapshot per second for
+ * 60 seconds. Large MBF21 maps can make each serialized snapshot multiple
+ * MiB, which exhausts the Vita newlib heap. Keep the feature, but bound the
+ * number of retained snapshots on Vita.
+ */
+#define VITA_AUTO_KF_MAX_DEPTH 8
+#define VITA_PLAYBACK_KF_MAX 4
+#endif
+
 #include "key_frame.h"
 
 static dboolean auto_kf_timed_out;
@@ -180,6 +193,18 @@ void dsda_InitAutoKeyFrames(void) {
 
   auto_kf_size = autoKeyFrameDepth();
 
+#ifdef __vita__
+  if (auto_kf_size > VITA_AUTO_KF_MAX_DEPTH) {
+    Vita_Log(
+      "[VITA] keyframes: auto depth clamped %d -> %d (interval=%ds)\n",
+      auto_kf_size,
+      VITA_AUTO_KF_MAX_DEPTH,
+      autoKeyFrameInterval()
+    );
+    auto_kf_size = VITA_AUTO_KF_MAX_DEPTH;
+  }
+#endif
+
   if (!auto_kf_size) {
     last_auto_kf = NULL;
     return;
@@ -209,6 +234,17 @@ void dsda_InitPlaybackKeyFrames() {
   playback_kf_size = demo_tics_count * demo_playerscount / TICRATE / 60;
   if (playback_kf_size > 60)
     playback_kf_size = 60;
+
+#ifdef __vita__
+  if (playback_kf_size > VITA_PLAYBACK_KF_MAX) {
+    Vita_Log(
+      "[VITA] keyframes: playback cache clamped %d -> %d\n",
+      playback_kf_size,
+      VITA_PLAYBACK_KF_MAX
+    );
+    playback_kf_size = VITA_PLAYBACK_KF_MAX;
+  }
+#endif
 
   if (playback_key_frames != NULL)
     Z_Free(playback_key_frames);
@@ -252,6 +288,16 @@ void dsda_StoreKeyFrame(dsda_key_frame_t* key_frame, byte complete, byte export)
 
   key_frame->buffer = savebuffer;
   key_frame->buffer_length = save_p - savebuffer;
+
+#ifdef __vita__
+  if (key_frame->buffer_length >= 1024 * 1024) {
+    Vita_Log(
+      "[VITA] keyframe stored: tic=%d size=%d KiB\n",
+      key_frame->game_tic_count,
+      key_frame->buffer_length / 1024
+    );
+  }
+#endif
 
   P_ForgetSaveBuffer();
 
