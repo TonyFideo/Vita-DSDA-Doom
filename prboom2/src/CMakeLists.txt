@@ -537,6 +537,8 @@ function(AddGameExecutable TARGET SOURCES)
             vita/vita_gl_stubs.c
             vita/vita_video.c
             vita/vita_video.h
+            vita/vita_launcher.c
+            vita/vita_launcher.h
         )
     endif()
 
