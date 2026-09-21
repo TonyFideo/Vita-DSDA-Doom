@@ -15,4 +15,10 @@ int Vita_LauncherRun(void);
 
 vita_launcher_renderer_t Vita_LauncherRenderer(void);
 
+/*
+ * Releases the launcher's direct-display CDRAM after vitaGL has completed its
+ * first display-queue flip and owns the scanout.
+ */
+void Vita_LauncherReleaseFramebuffer(void);
+
 #endif

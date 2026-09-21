@@ -360,9 +360,20 @@ void Vita_InitFilesystem(void)
   if (!Vita_PrepareWritableRoot(preferred_partition))
     Vita_PrepareWritableRoot("ux0:");
 
+  /*
+   * Start every process run with a fresh diagnostic log. Vita_Log itself
+   * remains append-only so individual writes cannot accidentally discard
+   * earlier messages from the same run.
+   */
+  {
+    FILE *fp = fopen(vita_log_path, "wb");
+    if (fp)
+      fclose(fp);
+  }
+
   vita_fs_initialized = 1;
 
-  Vita_Log("\n=== Vita-DSDA-Doom startup ===\n");
+  Vita_Log("=== Vita-DSDA-Doom startup ===\n");
   Vita_Log("[VITA] data root: %s\n", vita_data_root);
   Vita_Log("[VITA] temp dir: %s\n", vita_temp_dir);
   Vita_Log("[VITA] IWADs discovered: %d\n", vita_iwad_count);

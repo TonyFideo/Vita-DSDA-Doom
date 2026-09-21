@@ -147,18 +147,16 @@ static int Vita_LauncherInitFramebuffer(void)
   return 1;
 }
 
-static void Vita_LauncherShutdownFramebuffer(void)
+void Vita_LauncherReleaseFramebuffer(void)
 {
   if (!launcher_fb_pixels)
     return;
 
   /*
-   * Detach the scanout before releasing CDRAM. VitaGL will install its own
-   * display buffers later when DSDA initializes the gameplay renderer.
+   * This must only be called after another framebuffer has become the active
+   * scanout. In the gameplay transition Vita_VideoPresent() waits for the
+   * vitaGL display queue before releasing this CDRAM block.
    */
-  sceDisplaySetFrameBuf(NULL, SCE_DISPLAY_SETBUF_IMMEDIATE);
-  sceDisplayWaitVblankStart();
-
   launcher_fb_pixels = NULL;
 
   if (launcher_fb_uid >= 0)
@@ -166,6 +164,8 @@ static void Vita_LauncherShutdownFramebuffer(void)
     sceKernelFreeMemBlock(launcher_fb_uid);
     launcher_fb_uid = -1;
   }
+
+  Vita_Log("[VITA] launcher framebuffer released after VitaGL takeover\n");
 }
 
 static void Vita_LauncherClear(
@@ -705,7 +705,7 @@ int Vita_LauncherRun(void)
             pwad_path ? pwad_path : "none"
           );
 
-          Vita_LauncherShutdownFramebuffer();
+          Vita_Log("[VITA] launcher handoff: retaining framebuffer until first VitaGL flip\n");
           return 1;
         }
       }
@@ -714,7 +714,6 @@ int Vita_LauncherRun(void)
     if (pressed & SCE_CTRL_CIRCLE)
     {
       Vita_Log("[VITA] launcher exit requested\n");
-      Vita_LauncherShutdownFramebuffer();
       return 0;
     }
 

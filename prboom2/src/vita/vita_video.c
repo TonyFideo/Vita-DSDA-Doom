@@ -4,6 +4,7 @@
 #include <psp2/gxm.h>
 #include <vitaGL.h>
 
+#include "vita/vita_launcher.h"
 #include "vita/vita_system.h"
 #include "vita/vita_video.h"
 
@@ -31,6 +32,7 @@ static int vita_texture_height;
 static GLuint vita_frame_texture;
 static unsigned char *vita_upload_buffer;
 static size_t vita_upload_buffer_size;
+static int vita_launcher_framebuffer_released;
 
 static void Vita_Set2DState(void)
 {
@@ -57,6 +59,8 @@ int Vita_VideoInit(void)
 
   if (vita_video_initialized)
     return 1;
+
+  vita_launcher_framebuffer_released = 0;
 
   Vita_Log("[VITA] initializing VitaGL at %dx%d\n",
            VITA_DISPLAY_WIDTH, VITA_DISPLAY_HEIGHT);
@@ -265,6 +269,18 @@ void Vita_VideoPresent(const void *rgba_pixels, int pitch, int width, int height
   glDisableClientState(GL_VERTEX_ARRAY);
 
   vglSwapBuffers(GL_FALSE);
+
+  if (!vita_launcher_framebuffer_released)
+  {
+    /*
+     * vglSwapBuffers queues the new GXM surface asynchronously. Wait until the
+     * display callback has installed it before freeing the launcher's CDRAM;
+     * otherwise the display can still read the released 0x60000000 block.
+     */
+    sceGxmDisplayQueueFinish();
+    Vita_LauncherReleaseFramebuffer();
+    vita_launcher_framebuffer_released = 1;
+  }
 }
 
 int Vita_VideoInternalWidth(void)
