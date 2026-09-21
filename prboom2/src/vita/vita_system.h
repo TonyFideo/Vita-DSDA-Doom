@@ -26,4 +26,27 @@ char *Vita_FindAutoIWAD(void);
 
 void Vita_Log(const char *fmt, ...);
 
+typedef enum
+{
+  VITA_PROFILE_SETUP = 0,
+  VITA_PROFILE_CLEAR,
+  VITA_PROFILE_INIT_SCENE,
+  VITA_PROFILE_BSP_WALLS,
+  VITA_PROFILE_PLANES,
+  VITA_PROFILE_RESET_COLUMNS,
+  VITA_PROFILE_MASKED,
+  VITA_PROFILE_PRESENT,
+  VITA_PROFILE_COUNT
+} vita_profile_stage_t;
+
+extern unsigned int vita_profile_plane_cache_hits;
+extern unsigned int vita_profile_plane_cache_misses;
+
+void Vita_ProfileReset(void);
+int Vita_ProfileActive(void);
+unsigned int Vita_ProfileTimestamp(void);
+void Vita_ProfileAdd(vita_profile_stage_t stage, unsigned int usec);
+void Vita_ProfileFrame(void);
+void Vita_ProfileLog(void);
+
 #endif

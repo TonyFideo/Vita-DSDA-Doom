@@ -1286,6 +1286,9 @@ static void G_DoLoadLevel (void)
     if (first)
       {
         starttime = dsda_GetTickRealTime();
+#ifdef __vita__
+        Vita_ProfileReset();
+#endif
         first=0;
       }
   }
@@ -4060,6 +4063,7 @@ dboolean G_CheckDemoStatus (void)
         (double)realtics / TICRATE,
         fps
       );
+      Vita_ProfileLog();
 #endif
     }
 

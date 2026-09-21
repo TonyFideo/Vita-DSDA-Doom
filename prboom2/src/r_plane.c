@@ -65,6 +65,10 @@
 #include "dsda/render_stats.h"
 #include "dsda/configuration.h"
 
+#ifdef __vita__
+#include "vita/vita_system.h"
+#endif
+
 int Sky1Texture;
 int Sky2Texture;
 fixed_t Sky1ColumnOffset;
@@ -111,6 +115,12 @@ static int *spanstart = NULL;                // killough 2/8/98
 // killough 2/8/98: make variables static
 
 static fixed_t *cachedheight = NULL;
+static fixed_t *cachedsine = NULL;
+static fixed_t *cachedcosine = NULL;
+static fixed_t *cacheddistance = NULL;
+static fixed_t *cachedxstep = NULL;
+static fixed_t *cachedystep = NULL;
+static byte *cachevalid = NULL;
 
 // e6y: resolution limitation is removed
 fixed_t *yslope = NULL;
@@ -123,6 +133,12 @@ void R_InitPlanesRes(void)
   if (spanstart) Z_Free(spanstart);
 
   if (cachedheight) Z_Free(cachedheight);
+  if (cachedsine) Z_Free(cachedsine);
+  if (cachedcosine) Z_Free(cachedcosine);
+  if (cacheddistance) Z_Free(cacheddistance);
+  if (cachedxstep) Z_Free(cachedxstep);
+  if (cachedystep) Z_Free(cachedystep);
+  if (cachevalid) Z_Free(cachevalid);
 
   if (yslope) Z_Free(yslope);
   if (distscale) Z_Free(distscale);
@@ -132,6 +148,12 @@ void R_InitPlanesRes(void)
   spanstart = Z_Calloc(1, SCREENHEIGHT * sizeof(*spanstart));
 
   cachedheight = Z_Calloc(1, SCREENHEIGHT * sizeof(*cachedheight));
+  cachedsine = Z_Calloc(1, SCREENHEIGHT * sizeof(*cachedsine));
+  cachedcosine = Z_Calloc(1, SCREENHEIGHT * sizeof(*cachedcosine));
+  cacheddistance = Z_Calloc(1, SCREENHEIGHT * sizeof(*cacheddistance));
+  cachedxstep = Z_Calloc(1, SCREENHEIGHT * sizeof(*cachedxstep));
+  cachedystep = Z_Calloc(1, SCREENHEIGHT * sizeof(*cachedystep));
+  cachevalid = Z_Calloc(1, SCREENHEIGHT * sizeof(*cachevalid));
 
   yslope = Z_Calloc(1, SCREENHEIGHT * sizeof(*yslope));
   distscale = Z_Calloc(1, SCREENWIDTH * sizeof(*distscale));
@@ -172,8 +194,9 @@ void dsda_RefreshLinearSky (void)
 
 static void R_MapPlane(int y, int x1, int x2, draw_span_vars_t *dsvars)
 {
-  int64_t den;
   fixed_t distance;
+  fixed_t base_xstep;
+  fixed_t base_ystep;
   unsigned index;
 
 #ifdef RANGECHECK
@@ -192,11 +215,56 @@ static void R_MapPlane(int y, int x1, int x2, draw_span_vars_t *dsvars)
   // See cchest2.wad/map02/room with sector #265
   if (centery == y)
     return;
-  den = (int64_t)FRACUNIT * FRACUNIT * D_abs(centery - y);
-  distance = FixedMul(dsvars->planeheight, yslope[y]);
 
-  dsvars->xstep = (fixed_t)((int64_t)dsvars->sine * dsvars->planeheight * viewfocratio / den);
-  dsvars->ystep = (fixed_t)((int64_t)dsvars->cosine * dsvars->planeheight * viewfocratio / den);
+  /*
+   * Exact per-row plane-math cache.
+   *
+   * viewfocratio and yslope[y] are fixed for the frame. The remaining inputs
+   * to the expensive 64-bit divisions are planeheight and the effective
+   * sine/cosine (which include flat rotation). Scale, offsets and x1 are
+   * deliberately applied after the cached values, preserving DSDA's exact
+   * fixed-point operation order and supporting independently scaled/offset
+   * visplanes that share the same base projection.
+   */
+  if (cachevalid[y] &&
+      cachedheight[y] == dsvars->planeheight &&
+      cachedsine[y] == dsvars->sine &&
+      cachedcosine[y] == dsvars->cosine)
+  {
+    distance = cacheddistance[y];
+    base_xstep = cachedxstep[y];
+    base_ystep = cachedystep[y];
+#ifdef __vita__
+    ++vita_profile_plane_cache_hits;
+#endif
+  }
+  else
+  {
+    const int64_t den =
+      (int64_t)FRACUNIT * FRACUNIT * D_abs(centery - y);
+
+    distance = FixedMul(dsvars->planeheight, yslope[y]);
+    base_xstep =
+      (fixed_t)((int64_t)dsvars->sine * dsvars->planeheight *
+                viewfocratio / den);
+    base_ystep =
+      (fixed_t)((int64_t)dsvars->cosine * dsvars->planeheight *
+                viewfocratio / den);
+
+    cachevalid[y] = 1;
+    cachedheight[y] = dsvars->planeheight;
+    cachedsine[y] = dsvars->sine;
+    cachedcosine[y] = dsvars->cosine;
+    cacheddistance[y] = distance;
+    cachedxstep[y] = base_xstep;
+    cachedystep[y] = base_ystep;
+#ifdef __vita__
+    ++vita_profile_plane_cache_misses;
+#endif
+  }
+
+  dsvars->xstep = base_xstep;
+  dsvars->ystep = base_ystep;
 
   // killough 2/28/98: Add offsets
   dsvars->xfrac = dsvars->xoffs + FixedMul(dsvars->cosine, distance) + (x1 - centerx) * dsvars->xstep;
@@ -249,7 +317,7 @@ void R_ClearPlanes(void)
   lastopening = openings;
 
   // texture calculation
-  memset (cachedheight, 0, SCREENHEIGHT * sizeof(*cachedheight));
+  memset(cachevalid, 0, SCREENHEIGHT * sizeof(*cachevalid));
 }
 
 // New function, by Lee Killough

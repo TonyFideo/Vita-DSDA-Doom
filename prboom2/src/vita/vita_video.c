@@ -493,11 +493,15 @@ int Vita_VideoRenderPitch(void)
 void Vita_VideoPresent(int width, int height)
 {
   int covers_display;
+  unsigned int vita_prof_start = 0;
 
   if (!vita_video_initialized ||
       !vita_frame_pixels[vita_frame_texture_index] ||
       width <= 0 || height <= 0)
     return;
+
+  if (Vita_ProfileActive())
+    vita_prof_start = Vita_ProfileTimestamp();
 
   if (width != vita_texture_width || height != vita_texture_height)
     if (!Vita_VideoResize(width, height))
@@ -551,6 +555,12 @@ void Vita_VideoPresent(int width, int height)
     Vita_LauncherReleaseFramebuffer();
     vita_launcher_framebuffer_released = 1;
   }
+
+  if (vita_prof_start)
+    Vita_ProfileAdd(
+      VITA_PROFILE_PRESENT,
+      (unsigned int)(Vita_ProfileTimestamp() - vita_prof_start)
+    );
 }
 
 int Vita_VideoInternalWidth(void)

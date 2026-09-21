@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include <psp2/types.h>
+#include <psp2/kernel/processmgr.h>
 
 #include "z_zone.h"
 
@@ -27,6 +28,112 @@ static const char *const vita_partitions[] = {
 };
 
 static int vita_fs_initialized;
+
+static int vita_profile_active;
+static unsigned int vita_profile_frames;
+static unsigned long long vita_profile_stage_us[VITA_PROFILE_COUNT];
+
+unsigned int vita_profile_plane_cache_hits;
+unsigned int vita_profile_plane_cache_misses;
+
+void Vita_ProfileReset(void)
+{
+  memset(vita_profile_stage_us, 0, sizeof(vita_profile_stage_us));
+  vita_profile_frames = 0;
+  vita_profile_plane_cache_hits = 0;
+  vita_profile_plane_cache_misses = 0;
+  vita_profile_active = 1;
+
+  Vita_Log("[VITA][PROFILE] timedemo profiler started\n");
+}
+
+int Vita_ProfileActive(void)
+{
+  return vita_profile_active;
+}
+
+unsigned int Vita_ProfileTimestamp(void)
+{
+  return sceKernelGetProcessTimeLow();
+}
+
+void Vita_ProfileAdd(vita_profile_stage_t stage, unsigned int usec)
+{
+  if (!vita_profile_active || stage < 0 || stage >= VITA_PROFILE_COUNT)
+    return;
+
+  vita_profile_stage_us[stage] += usec;
+}
+
+void Vita_ProfileFrame(void)
+{
+  if (vita_profile_active)
+    ++vita_profile_frames;
+}
+
+void Vita_ProfileLog(void)
+{
+  static const char *const names[VITA_PROFILE_COUNT] = {
+    "setup",
+    "clear",
+    "init_scene",
+    "bsp_walls",
+    "planes",
+    "reset_columns",
+    "masked",
+    "present"
+  };
+  unsigned long long total = 0;
+  unsigned int cache_total;
+  int i;
+
+  if (!vita_profile_active)
+    return;
+
+  for (i = 0; i < VITA_PROFILE_COUNT; ++i)
+    total += vita_profile_stage_us[i];
+
+  Vita_Log(
+    "[VITA][PROFILE] frames=%u measured_us=%llu avg_measured_us=%.2f\n",
+    vita_profile_frames,
+    total,
+    vita_profile_frames ? (double)total / vita_profile_frames : 0.0
+  );
+
+  for (i = 0; i < VITA_PROFILE_COUNT; ++i)
+  {
+    const double pct = total
+      ? (100.0 * (double)vita_profile_stage_us[i] / (double)total)
+      : 0.0;
+    const double avg = vita_profile_frames
+      ? (double)vita_profile_stage_us[i] / vita_profile_frames
+      : 0.0;
+
+    Vita_Log(
+      "[VITA][PROFILE] %-13s total_us=%llu avg_us=%.2f pct=%.2f\n",
+      names[i],
+      vita_profile_stage_us[i],
+      avg,
+      pct
+    );
+  }
+
+  cache_total =
+    vita_profile_plane_cache_hits + vita_profile_plane_cache_misses;
+
+  Vita_Log(
+    "[VITA][PROFILE] mapplane_cache hits=%u misses=%u total=%u hit_rate=%.2f%% divisions_avoided=%u\n",
+    vita_profile_plane_cache_hits,
+    vita_profile_plane_cache_misses,
+    cache_total,
+    cache_total
+      ? 100.0 * (double)vita_profile_plane_cache_hits / cache_total
+      : 0.0,
+    vita_profile_plane_cache_hits * 2
+  );
+
+  vita_profile_active = 0;
+}
 static char vita_data_root[VITA_PATH_MAX] = "ux0:/data/DSDA-Doom";
 static char vita_temp_dir[VITA_PATH_MAX] = "ux0:/data/DSDA-Doom/Temp";
 static char vita_log_path[VITA_PATH_MAX] = "ux0:/data/DSDA-Doom/Logs/dsda-vita.log";
