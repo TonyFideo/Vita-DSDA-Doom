@@ -201,6 +201,15 @@ void dsda_InitGameController(void) {
   use_game_controller =
     dsda_IntConfig(dsda_config_use_game_controller) && !dsda_Flag(dsda_arg_nojoy);
 
+#ifdef __vita__
+  /*
+   * Vita has no keyboard fallback for normal gameplay. Open the primary
+   * controller by default while still honoring an explicit -nojoy.
+   */
+  if (!use_game_controller && !dsda_Flag(dsda_arg_nojoy))
+    use_game_controller = 1;
+#endif
+
   if (!use_game_controller)
     return;
 
