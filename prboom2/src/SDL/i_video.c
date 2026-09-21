@@ -648,8 +648,21 @@ void I_FinishUpdate (void)
     newpal = NO_PALETTE_CHANGE;
   }
 
-  Vita_VideoPresent(screen->pixels, screen->pitch, SCREENWIDTH, SCREENHEIGHT);
+  Vita_VideoPresent(SCREENWIDTH, SCREENHEIGHT);
+
+  /*
+   * Capture the frame that was just submitted before rotating the software
+   * framebuffer. Then point SDL, V_* and the renderer's hot draw pointer at
+   * the next RAM/GXM slot. No framebuffer copy occurs.
+   */
   I_HandleCapture();
+
+  screen->pixels = Vita_VideoRenderBuffer();
+  screen->pitch = Vita_VideoRenderPitch();
+  screens[0].data = (unsigned char *)screen->pixels;
+  screens[0].pitch = screen->pitch;
+  drawvars.topleft = screens[0].data;
+  drawvars.pitch = screens[0].pitch;
   return;
 #else
 
@@ -1301,11 +1314,6 @@ void I_InitGraphics(void)
 void I_UpdateVideoMode(void)
 {
 #ifdef __vita__
-  const Uint32 rmask = 0x000000ff;
-  const Uint32 gmask = 0x0000ff00;
-  const Uint32 bmask = 0x00ff0000;
-  const Uint32 amask = 0xff000000;
-
   if (screen)
   {
     /*
@@ -1335,20 +1343,23 @@ void I_UpdateVideoMode(void)
   desired_fullscreen = 1;
   exclusive_fullscreen = 0;
 
-  screen = SDL_CreateRGBSurface(
-    0, SCREENWIDTH, SCREENHEIGHT, 8, 0, 0, 0, 0
+  /*
+   * SDL remains the palette/capture wrapper, but it no longer owns or allocates
+   * the pixels. Its pixels point directly at the current CPU/GPU shared P8
+   * slot supplied by VitaGL.
+   */
+  screen = SDL_CreateRGBSurfaceFrom(
+    Vita_VideoRenderBuffer(),
+    SCREENWIDTH,
+    SCREENHEIGHT,
+    8,
+    Vita_VideoRenderPitch(),
+    0, 0, 0, 0
   );
 
-  buffer = SDL_CreateRGBSurface(
-    0, SCREENWIDTH, SCREENHEIGHT, 32,
-    rmask, gmask, bmask, amask
-  );
-
-  if (!screen || !buffer)
-    I_Error("Unable to create Vita software surfaces %dx%d: %s",
+  if (!screen)
+    I_Error("Unable to create Vita zero-copy surface %dx%d: %s",
             SCREENWIDTH, SCREENHEIGHT, SDL_GetError());
-
-  SDL_FillRect(buffer, NULL, 0);
 
   screens[0].not_on_heap = true;
   screens[0].data = (unsigned char *)screen->pixels;
@@ -1383,8 +1394,14 @@ void I_UpdateVideoMode(void)
   viewport_rect = window_rect;
   window_focused = true;
 
-  Vita_Log("[VITA] video mode ready: software=%dx%d display=%dx%d\n",
-           SCREENWIDTH, SCREENHEIGHT, VITA_DISPLAY_WIDTH, VITA_DISPLAY_HEIGHT);
+  Vita_Log(
+    "[VITA] video mode ready: software=%dx%d display=%dx%d zero_copy=1 pitch=%d\n",
+    SCREENWIDTH,
+    SCREENHEIGHT,
+    VITA_DISPLAY_WIDTH,
+    VITA_DISPLAY_HEIGHT,
+    screen->pitch
+  );
   return;
 #else
 
