@@ -87,6 +87,7 @@
 
 #ifdef __vita__
 #include "vita/vita_system.h"
+#include "vita/vita_launcher.h"
 #endif
 
 /* Most of the following has been rewritten by Lee Killough
@@ -290,6 +291,11 @@ int main(int argc, char **argv)
     PrintVer();
     return 0;
   }
+
+#ifdef __vita__
+  if (!Vita_LauncherRun())
+    return 0;
+#endif
 
   // e6y: Check for conflicts.
   // Conflicting command-line parameters could cause the engine to be confused
