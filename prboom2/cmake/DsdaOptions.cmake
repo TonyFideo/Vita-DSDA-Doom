@@ -30,7 +30,7 @@ if(VITA)
   set(DSDA_ENABLE_OPENGL_RENDERER OFF CACHE BOOL "Build the native DSDA OpenGL renderer" FORCE)
   set(DSDA_VITA_PRESENT_VITAGL ON CACHE BOOL "Use VitaGL to present the software framebuffer on Vita" FORCE)
 
-  set(VITA_TITLEID "VDSDA0001" CACHE STRING "PS Vita title id")
+  set(VITA_TITLEID "DSDA02689" CACHE STRING "PS Vita title id")
   set(VITA_APP_NAME "Vita-DSDA-Doom" CACHE STRING "PS Vita application name")
   set(VITA_VERSION "01.00" CACHE STRING "PS Vita application version")
   set(VITA_DISPLAY_WIDTH 960 CACHE STRING "PS Vita physical display width")
