@@ -1,10 +1,12 @@
 #include <ctype.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include <psp2/ctrl.h>
-#include <vitaGL.h>
+#include <psp2/display.h>
+#include <psp2/kernel/sysmem.h>
 
 #include "vita/vita_launcher.h"
 #include "vita/vita_system.h"
@@ -22,12 +24,9 @@
 #define VITA_DISPLAY_HEIGHT 544
 #endif
 
-#define LAUNCHER_FONT_COLS 16
-#define LAUNCHER_FONT_ROWS 16
 #define LAUNCHER_FONT_W 8
 #define LAUNCHER_FONT_H 18
-#define LAUNCHER_ATLAS_W (LAUNCHER_FONT_COLS * LAUNCHER_FONT_W)
-#define LAUNCHER_ATLAS_H (LAUNCHER_FONT_ROWS * LAUNCHER_FONT_H)
+#define LAUNCHER_FB_ALIGNMENT (256 * 1024)
 
 typedef struct
 {
@@ -51,22 +50,179 @@ static const vita_resolution_option_t vita_resolution_options[] = {
 static vita_launcher_renderer_t vita_launcher_renderer =
   VITA_LAUNCHER_RENDERER_SOFTWARE;
 
-static GLuint launcher_font_texture;
+static SceUID launcher_fb_uid = -1;
+static uint32_t *launcher_fb_pixels;
 
-static void Vita_LauncherSet2D(void)
+static size_t Vita_LauncherAlignUp(size_t value, size_t alignment)
 {
-  glViewport(0, 0, VITA_DISPLAY_WIDTH, VITA_DISPLAY_HEIGHT);
+  return (value + alignment - 1) & ~(alignment - 1);
+}
 
-  glMatrixMode(GL_PROJECTION);
-  glLoadIdentity();
-  glOrtho(0.0, VITA_DISPLAY_WIDTH, VITA_DISPLAY_HEIGHT, 0.0, -1.0, 1.0);
+static uint8_t Vita_LauncherColor(float value)
+{
+  if (value <= 0.0f)
+    return 0;
+  if (value >= 1.0f)
+    return 255;
+  return (uint8_t)(value * 255.0f + 0.5f);
+}
 
-  glMatrixMode(GL_MODELVIEW);
-  glLoadIdentity();
+static uint32_t Vita_LauncherPackRGBA(
+  uint8_t r,
+  uint8_t g,
+  uint8_t b,
+  uint8_t a)
+{
+  /*
+   * SCE_DISPLAY_PIXELFORMAT_A8B8G8R8 is AABBGGRR as a 32-bit word.
+   * On the Vita's little-endian CPU that is RGBA byte order in memory.
+   */
+  return ((uint32_t)a << 24) |
+         ((uint32_t)b << 16) |
+         ((uint32_t)g << 8) |
+         (uint32_t)r;
+}
 
-  glDisable(GL_DEPTH_TEST);
-  glDisable(GL_CULL_FACE);
-  glDisable(GL_SCISSOR_TEST);
+static int Vita_LauncherInitFramebuffer(void)
+{
+  const size_t raw_size =
+    (size_t)VITA_DISPLAY_WIDTH * VITA_DISPLAY_HEIGHT * sizeof(uint32_t);
+  const size_t alloc_size =
+    Vita_LauncherAlignUp(raw_size, LAUNCHER_FB_ALIGNMENT);
+  SceDisplayFrameBuf fb;
+
+  if (launcher_fb_pixels)
+    return 1;
+
+  launcher_fb_uid = sceKernelAllocMemBlock(
+    "dsda_launcher_fb",
+    SCE_KERNEL_MEMBLOCK_TYPE_USER_CDRAM_RW,
+    (SceSize)alloc_size,
+    NULL
+  );
+  if (launcher_fb_uid < 0)
+  {
+    Vita_Log(
+      "[VITA] launcher: framebuffer allocation failed: 0x%08x\n",
+      (unsigned int)launcher_fb_uid
+    );
+    launcher_fb_uid = -1;
+    return 0;
+  }
+
+  if (sceKernelGetMemBlockBase(launcher_fb_uid, (void **)&launcher_fb_pixels) < 0 ||
+      !launcher_fb_pixels)
+  {
+    Vita_Log("[VITA] launcher: unable to get framebuffer base\n");
+    sceKernelFreeMemBlock(launcher_fb_uid);
+    launcher_fb_uid = -1;
+    launcher_fb_pixels = NULL;
+    return 0;
+  }
+
+  memset(launcher_fb_pixels, 0, raw_size);
+  memset(&fb, 0, sizeof(fb));
+  fb.size = sizeof(fb);
+  fb.base = launcher_fb_pixels;
+  fb.pitch = VITA_DISPLAY_WIDTH;
+  fb.pixelformat = SCE_DISPLAY_PIXELFORMAT_A8B8G8R8;
+  fb.width = VITA_DISPLAY_WIDTH;
+  fb.height = VITA_DISPLAY_HEIGHT;
+
+  if (sceDisplaySetFrameBuf(&fb, SCE_DISPLAY_SETBUF_IMMEDIATE) < 0)
+  {
+    Vita_Log("[VITA] launcher: sceDisplaySetFrameBuf failed\n");
+    sceKernelFreeMemBlock(launcher_fb_uid);
+    launcher_fb_uid = -1;
+    launcher_fb_pixels = NULL;
+    return 0;
+  }
+
+  Vita_Log(
+    "[VITA] launcher framebuffer ready: %dx%d, %u bytes\n",
+    VITA_DISPLAY_WIDTH,
+    VITA_DISPLAY_HEIGHT,
+    (unsigned int)alloc_size
+  );
+  return 1;
+}
+
+static void Vita_LauncherShutdownFramebuffer(void)
+{
+  if (!launcher_fb_pixels)
+    return;
+
+  /*
+   * Detach the scanout before releasing CDRAM. VitaGL will install its own
+   * display buffers later when DSDA initializes the gameplay renderer.
+   */
+  sceDisplaySetFrameBuf(NULL, SCE_DISPLAY_SETBUF_IMMEDIATE);
+  sceDisplayWaitVblankStart();
+
+  launcher_fb_pixels = NULL;
+
+  if (launcher_fb_uid >= 0)
+  {
+    sceKernelFreeMemBlock(launcher_fb_uid);
+    launcher_fb_uid = -1;
+  }
+}
+
+static void Vita_LauncherClear(
+  uint8_t r,
+  uint8_t g,
+  uint8_t b,
+  uint8_t a)
+{
+  const uint32_t color = Vita_LauncherPackRGBA(r, g, b, a);
+  const size_t count = (size_t)VITA_DISPLAY_WIDTH * VITA_DISPLAY_HEIGHT;
+  size_t i;
+
+  if (!launcher_fb_pixels)
+    return;
+
+  for (i = 0; i < count; ++i)
+    launcher_fb_pixels[i] = color;
+}
+
+static void Vita_LauncherBlendPixel(
+  int x,
+  int y,
+  uint8_t r,
+  uint8_t g,
+  uint8_t b,
+  uint8_t a)
+{
+  uint32_t *dst;
+  uint32_t packed;
+
+  if (!launcher_fb_pixels ||
+      x < 0 || x >= VITA_DISPLAY_WIDTH ||
+      y < 0 || y >= VITA_DISPLAY_HEIGHT ||
+      a == 0)
+    return;
+
+  dst = &launcher_fb_pixels[(size_t)y * VITA_DISPLAY_WIDTH + x];
+
+  if (a == 255)
+  {
+    *dst = Vita_LauncherPackRGBA(r, g, b, 255);
+    return;
+  }
+
+  packed = *dst;
+
+  {
+    const unsigned int inv = 255u - a;
+    const unsigned int dr = packed & 0xffu;
+    const unsigned int dg = (packed >> 8) & 0xffu;
+    const unsigned int db = (packed >> 16) & 0xffu;
+    const uint8_t out_r = (uint8_t)((r * a + dr * inv + 127u) / 255u);
+    const uint8_t out_g = (uint8_t)((g * a + dg * inv + 127u) / 255u);
+    const uint8_t out_b = (uint8_t)((b * a + db * inv + 127u) / 255u);
+
+    *dst = Vita_LauncherPackRGBA(out_r, out_g, out_b, 255);
+  }
 }
 
 static void Vita_LauncherDrawRect(
@@ -79,86 +235,26 @@ static void Vita_LauncherDrawRect(
   float b,
   float a)
 {
-  glDisable(GL_TEXTURE_2D);
-  glEnable(GL_BLEND);
-  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-  glColor4f(r, g, b, a);
+  int x0 = (int)x;
+  int y0 = (int)y;
+  int x1 = (int)(x + w + 0.5f);
+  int y1 = (int)(y + h + 0.5f);
+  int px;
+  int py;
+  const uint8_t cr = Vita_LauncherColor(r);
+  const uint8_t cg = Vita_LauncherColor(g);
+  const uint8_t cb = Vita_LauncherColor(b);
+  const uint8_t ca = Vita_LauncherColor(a);
 
-  glBegin(GL_QUADS);
-    glVertex2f(x, y);
-    glVertex2f(x + w, y);
-    glVertex2f(x + w, y + h);
-    glVertex2f(x, y + h);
-  glEnd();
-}
+  if (x0 < 0) x0 = 0;
+  if (y0 < 0) y0 = 0;
+  if (x1 > VITA_DISPLAY_WIDTH) x1 = VITA_DISPLAY_WIDTH;
+  if (y1 > VITA_DISPLAY_HEIGHT) y1 = VITA_DISPLAY_HEIGHT;
 
-static int Vita_LauncherCreateFont(void)
-{
-  unsigned char *pixels;
-  int ch;
-  int cy;
-  int cx;
-
-  if (launcher_font_texture)
-    return 1;
-
-  pixels = calloc((size_t)LAUNCHER_ATLAS_W * LAUNCHER_ATLAS_H, 4);
-  if (!pixels)
-    return 0;
-
-  for (ch = 0; ch < 256; ++ch)
+  for (py = y0; py < y1; ++py)
   {
-    const int glyph_x = (ch % LAUNCHER_FONT_COLS) * LAUNCHER_FONT_W;
-    const int glyph_y = (ch / LAUNCHER_FONT_COLS) * LAUNCHER_FONT_H;
-
-    for (cy = 0; cy < LAUNCHER_FONT_H; ++cy)
-    {
-      const unsigned char row = normal_font.data[ch * LAUNCHER_FONT_H + cy];
-
-      for (cx = 0; cx < LAUNCHER_FONT_W; ++cx)
-      {
-        const int atlas_x = glyph_x + cx;
-        const int atlas_y = glyph_y + cy;
-        const size_t offset =
-          ((size_t)atlas_y * LAUNCHER_ATLAS_W + atlas_x) * 4;
-
-        pixels[offset + 0] = 255;
-        pixels[offset + 1] = 255;
-        pixels[offset + 2] = 255;
-        pixels[offset + 3] = (row & (1u << cx)) ? 255 : 0;
-      }
-    }
-  }
-
-  glGenTextures(1, &launcher_font_texture);
-  glBindTexture(GL_TEXTURE_2D, launcher_font_texture);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-  glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-  glTexImage2D(
-    GL_TEXTURE_2D,
-    0,
-    GL_RGBA,
-    LAUNCHER_ATLAS_W,
-    LAUNCHER_ATLAS_H,
-    0,
-    GL_RGBA,
-    GL_UNSIGNED_BYTE,
-    pixels
-  );
-
-  free(pixels);
-  return launcher_font_texture != 0;
-}
-
-static void Vita_LauncherDestroyFont(void)
-{
-  if (launcher_font_texture)
-  {
-    glDeleteTextures(1, &launcher_font_texture);
-    launcher_font_texture = 0;
+    for (px = x0; px < x1; ++px)
+      Vita_LauncherBlendPixel(px, py, cr, cg, cb, ca);
   }
 }
 
@@ -172,44 +268,43 @@ static void Vita_LauncherDrawText(
   float b,
   float a)
 {
-  const float glyph_w = LAUNCHER_FONT_W * scale;
-  const float glyph_h = LAUNCHER_FONT_H * scale;
-  float cursor_x = x;
+  const uint8_t cr = Vita_LauncherColor(r);
+  const uint8_t cg = Vita_LauncherColor(g);
+  const uint8_t cb = Vita_LauncherColor(b);
+  const uint8_t ca = Vita_LauncherColor(a);
+  int cursor_x = (int)x;
+  const int base_y = (int)y;
+  int glyph_w = (int)(LAUNCHER_FONT_W * scale + 0.5f);
+  int glyph_h = (int)(LAUNCHER_FONT_H * scale + 0.5f);
 
-  if (!text || !launcher_font_texture)
+  if (!text || !launcher_fb_pixels)
     return;
 
-  glEnable(GL_TEXTURE_2D);
-  glBindTexture(GL_TEXTURE_2D, launcher_font_texture);
-  glEnable(GL_BLEND);
-  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-  glColor4f(r, g, b, a);
-
-  glBegin(GL_QUADS);
+  if (glyph_w < 1) glyph_w = 1;
+  if (glyph_h < 1) glyph_h = 1;
 
   while (*text)
   {
     const unsigned char ch = (unsigned char)*text++;
-    const int col = ch % LAUNCHER_FONT_COLS;
-    const int row = ch / LAUNCHER_FONT_COLS;
-    const float u0 = (float)(col * LAUNCHER_FONT_W) / LAUNCHER_ATLAS_W;
-    const float v0 = (float)(row * LAUNCHER_FONT_H) / LAUNCHER_ATLAS_H;
-    const float u1 = (float)((col + 1) * LAUNCHER_FONT_W) / LAUNCHER_ATLAS_W;
-    const float v1 = (float)((row + 1) * LAUNCHER_FONT_H) / LAUNCHER_ATLAS_H;
+    int dy;
 
-    glTexCoord2f(u0, v0);
-    glVertex2f(cursor_x, y);
-    glTexCoord2f(u1, v0);
-    glVertex2f(cursor_x + glyph_w, y);
-    glTexCoord2f(u1, v1);
-    glVertex2f(cursor_x + glyph_w, y + glyph_h);
-    glTexCoord2f(u0, v1);
-    glVertex2f(cursor_x, y + glyph_h);
+    for (dy = 0; dy < glyph_h; ++dy)
+    {
+      const int sy = (dy * LAUNCHER_FONT_H) / glyph_h;
+      const unsigned char row = normal_font.data[ch * LAUNCHER_FONT_H + sy];
+      int dx;
+
+      for (dx = 0; dx < glyph_w; ++dx)
+      {
+        const int sx = (dx * LAUNCHER_FONT_W) / glyph_w;
+
+        if (row & (1u << sx))
+          Vita_LauncherBlendPixel(cursor_x + dx, base_y + dy, cr, cg, cb, ca);
+      }
+    }
 
     cursor_x += glyph_w;
   }
-
-  glEnd();
 }
 
 static void Vita_LauncherUppercase(char *text)
@@ -361,15 +456,7 @@ static void Vita_LauncherDraw(
   Vita_LauncherIWADLabel(iwad_index, iwad_label, sizeof(iwad_label));
   Vita_LauncherPWADLabel(pwad_selector_index, pwad_label, sizeof(pwad_label));
 
-  /*
-   * In the pinned vitaGL revision glClear() is the operation that opens the
-   * first GXM scene for the frame. Calls such as glViewport() and
-   * glDisable(GL_CULL_FACE) reach sceGxm immediately, so they must not run
-   * before a scene exists.
-   */
-  glClearColor(0.015f, 0.020f, 0.028f, 1.0f);
-  glClear(GL_COLOR_BUFFER_BIT);
-  Vita_LauncherSet2D();
+  Vita_LauncherClear(4, 5, 7, 255);
 
   Vita_LauncherDrawRect(0.0f, 0.0f, 960.0f, 105.0f, 0.04f, 0.13f, 0.20f, 1.0f);
   Vita_LauncherDrawText(
@@ -449,7 +536,7 @@ static void Vita_LauncherDraw(
     );
   }
 
-  vglSwapBuffers(GL_FALSE);
+  sceDisplayWaitVblankStart();
 }
 
 static int Vita_LauncherWrap(int value, int count)
@@ -486,15 +573,9 @@ int Vita_LauncherRun(void)
   iwad_index = Vita_SelectedIWADIndex();
   pwad_count = Vita_PWADCount();
 
-  if (!Vita_VideoInit())
+  if (!Vita_LauncherInitFramebuffer())
   {
-    Vita_Log("[VITA] launcher: VitaGL presentation init returned failure\n");
-    return 0;
-  }
-
-  if (!Vita_LauncherCreateFont())
-  {
-    Vita_Log("[VITA] launcher: unable to create font texture\n");
+    Vita_Log("[VITA] launcher: direct framebuffer init failed\n");
     return 0;
   }
 
@@ -624,7 +705,7 @@ int Vita_LauncherRun(void)
             pwad_path ? pwad_path : "none"
           );
 
-          Vita_LauncherDestroyFont();
+          Vita_LauncherShutdownFramebuffer();
           return 1;
         }
       }
@@ -633,7 +714,7 @@ int Vita_LauncherRun(void)
     if (pressed & SCE_CTRL_CIRCLE)
     {
       Vita_Log("[VITA] launcher exit requested\n");
-      Vita_LauncherDestroyFont();
+      Vita_LauncherShutdownFramebuffer();
       return 0;
     }
 
