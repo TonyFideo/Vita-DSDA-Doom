@@ -106,6 +106,46 @@ unsigned char *I_GrabScreen(void)
 
   I_UpdateRenderSize();
 
+#ifdef __vita__
+  /*
+   * Capture the software framebuffer directly. This keeps screenshots at the
+   * internal render resolution even when VitaGL scales it to 960x544.
+   */
+  renderW = SCREENWIDTH;
+  renderH = SCREENHEIGHT;
+  size = renderW * renderH * 3;
+
+  if (!pixels || size > pixels_size)
+  {
+    pixels_size = size;
+    pixels = (unsigned char*)Z_Realloc(pixels, size);
+  }
+
+  if (pixels && size)
+  {
+    extern SDL_Surface *screen;
+    int x, y;
+
+    if (!screen || !screen->format || !screen->format->palette)
+      return NULL;
+
+    for (y = 0; y < SCREENHEIGHT; ++y)
+    {
+      const byte *src = screens[0].data + y * screens[0].pitch;
+      unsigned char *dst = pixels + y * SCREENWIDTH * 3;
+
+      for (x = 0; x < SCREENWIDTH; ++x)
+      {
+        const SDL_Color color = screen->format->palette->colors[src[x]];
+        dst[x * 3 + 0] = color.r;
+        dst[x * 3 + 1] = color.g;
+        dst[x * 3 + 2] = color.b;
+      }
+    }
+  }
+
+  return pixels;
+#else
   if (V_IsOpenGLMode())
   {
     return gld_ReadScreen();
@@ -125,4 +165,5 @@ unsigned char *I_GrabScreen(void)
   }
 
   return pixels;
+#endif
 }
