@@ -315,7 +315,6 @@ set(COMMON_SRC
     hu_stuff.h
     info.c
     info.h
-    i_capture.c
     i_capture.h
     i_glob.c
     i_glob.h
@@ -440,6 +439,12 @@ else()
     set(WAD_SRC w_memcache.c)
 endif()
 
+if(VITA)
+    set(CAPTURE_SRC vita/vita_capture.c)
+else()
+    set(CAPTURE_SRC i_capture.c)
+endif()
+
 set(MUS2MID_SRC
     memio.c
     memio.h
@@ -492,6 +497,7 @@ set(DSDA_SOURCES
     ${COMMON_SRC}
     ${NET_CLIENT_SRC}
     ${WAD_SRC}
+    ${CAPTURE_SRC}
     ${MUS2MID_SRC}
     ${SDLDOOM_SOURCES}
     ${DOOMMUSIC_SOURCES}
