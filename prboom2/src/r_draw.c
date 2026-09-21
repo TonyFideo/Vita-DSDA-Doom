@@ -35,6 +35,11 @@
 
 #include <stdint.h>
 
+#if defined(__vita__) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
+#include <arm_neon.h>
+#define VITA_NEON_SOFTWARE_RENDER 1
+#endif
+
 #include "doomstat.h"
 #include "w_wad.h"
 #include "r_main.h"
@@ -448,6 +453,73 @@ void R_DrawSpan(draw_span_vars_t *dsvars) {
   const byte *source = dsvars->source;
   const byte *colormap = dsvars->colormap;
   byte *dest = drawvars.topleft + dsvars->y*drawvars.pitch + dsvars->x1;
+
+#ifdef VITA_NEON_SOFTWARE_RENDER
+  /*
+   * ARMv7 NEON has no byte gather, so the two table reads remain scalar.
+   * The fixed-point coordinate math is still a sizeable part of long floor /
+   * ceiling spans: compute four texture indices in parallel, then gather and
+   * store the exact same palette indices as the scalar path.
+   *
+   * Use unsigned vector adds so fixed_t progression has explicit 32-bit wrap
+   * semantics. Reinterpret to signed only for the arithmetic shifts, matching
+   * the scalar signed >> used below. Short spans stay on the scalar path to
+   * avoid SIMD setup overhead.
+   */
+  if (count >= 8)
+  {
+    unsigned blocks = count >> 2;
+    const uint32_t ux = (uint32_t)xfrac;
+    const uint32_t uy = (uint32_t)yfrac;
+    const uint32_t usx = (uint32_t)xstep;
+    const uint32_t usy = (uint32_t)ystep;
+    const uint32_t xbase[4] = {
+      ux,
+      ux + usx,
+      ux + usx * 2u,
+      ux + usx * 3u
+    };
+    const uint32_t ybase[4] = {
+      uy,
+      uy + usy,
+      uy + usy * 2u,
+      uy + usy * 3u
+    };
+    uint32x4_t vx = vld1q_u32(xbase);
+    uint32x4_t vy = vld1q_u32(ybase);
+    const uint32x4_t vxs = vdupq_n_u32(usx * 4u);
+    const uint32x4_t vys = vdupq_n_u32(usy * 4u);
+    const int32x4_t m63 = vdupq_n_s32(63);
+    const int32x4_t m4032 = vdupq_n_s32(4032);
+    const unsigned consumed = blocks << 2;
+
+    while (blocks--)
+    {
+      uint32_t idx[4];
+      const int32x4_t sx = vreinterpretq_s32_u32(vx);
+      const int32x4_t sy = vreinterpretq_s32_u32(vy);
+      const int32x4_t xt = vandq_s32(vshrq_n_s32(sx, 16), m63);
+      const int32x4_t yt = vandq_s32(vshrq_n_s32(sy, 10), m4032);
+      const uint32x4_t spot =
+        vreinterpretq_u32_s32(vorrq_s32(xt, yt));
+
+      vst1q_u32(idx, spot);
+
+      dest[0] = colormap[source[idx[0]]];
+      dest[1] = colormap[source[idx[1]]];
+      dest[2] = colormap[source[idx[2]]];
+      dest[3] = colormap[source[idx[3]]];
+      dest += 4;
+
+      vx = vaddq_u32(vx, vxs);
+      vy = vaddq_u32(vy, vys);
+    }
+
+    xfrac = (fixed_t)(ux + (uint32_t)consumed * usx);
+    yfrac = (fixed_t)(uy + (uint32_t)consumed * usy);
+    count -= consumed;
+  }
+#endif
 
   while (count) {
     const fixed_t xtemp = (xfrac >> 16) & 63;
