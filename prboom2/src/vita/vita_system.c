@@ -19,6 +19,20 @@
 SceUInt32 sceUserMainThreadStackSize = 1024 * 1024;
 unsigned int _newlib_heap_size_user = 128 * 1024 * 1024;
 
+/*
+ * Current VitaSDK/binutils releases can place the RX and RW PT_LOAD segments
+ * too close together for vita-elf-create to append the generated SCE module
+ * metadata (vitasdk/buildscripts#144). Keep a tiny, strongly-aligned object in
+ * rodata so the RX segment finishes just after a large alignment boundary and
+ * leaves deterministic slack before the RW segment. This consumes address/file
+ * padding, not a 128 KiB runtime allocation.
+ *
+ * Xash3D and other Vita ports use the same workaround while the toolchain
+ * regression remains unresolved.
+ */
+const unsigned char vita_elf_sce_slack
+  __attribute__((used, aligned(0x20000))) = 0xff;
+
 static const char *const vita_partitions[] = {
   "ux0:",
   "uma0:",
