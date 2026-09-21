@@ -596,10 +596,20 @@ function(AddGameExecutable TARGET SOURCES)
         target_link_options(${TARGET} PRIVATE -Wl,-q)
     endif()
 
-    set_target_properties(${TARGET} PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY ${DSDA_OUTPUT_PATH}
-        C_STANDARD 99
-    )
+    if(VITA)
+        # vita_create_self()/vita_create_vpk() operate in this CMake
+        # subdirectory. Keep the ELF beside their VELF/SELF outputs so Ninja
+        # can resolve the generated dependency graph correctly.
+        set_target_properties(${TARGET} PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+            C_STANDARD 99
+        )
+    else()
+        set_target_properties(${TARGET} PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY ${DSDA_OUTPUT_PATH}
+            C_STANDARD 99
+        )
+    endif()
 
     add_dependencies(${TARGET} dsda-doom-wad)
     add_custom_command(TARGET ${TARGET}
