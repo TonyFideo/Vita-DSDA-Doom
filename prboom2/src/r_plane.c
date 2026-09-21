@@ -203,7 +203,8 @@ typedef struct
 static vita_plane_span_cmd_t *vita_plane_cmds;
 static size_t vita_plane_cmd_count;
 static size_t vita_plane_cmd_capacity;
-static unsigned int vita_plane_row_pixels[MAX_SCREENHEIGHT];
+static unsigned int *vita_plane_row_pixels;
+static int vita_plane_row_capacity;
 static unsigned int vita_plane_pixels;
 static int vita_plane_recording;
 
@@ -313,9 +314,27 @@ static int Vita_InitPlaneWorkers(void)
 
 static void Vita_ResetPlaneCommands(void)
 {
+  if (vita_plane_row_capacity < SCREENHEIGHT)
+  {
+    unsigned int *new_rows = (unsigned int *)realloc(
+      vita_plane_row_pixels,
+      (size_t)SCREENHEIGHT * sizeof(*new_rows)
+    );
+
+    if (!new_rows)
+      I_Error("Vita_ResetPlaneCommands: failed to grow row counters");
+
+    vita_plane_row_pixels = new_rows;
+    vita_plane_row_capacity = SCREENHEIGHT;
+  }
+
   vita_plane_cmd_count = 0;
   vita_plane_pixels = 0;
-  memset(vita_plane_row_pixels, 0, sizeof(vita_plane_row_pixels));
+  memset(
+    vita_plane_row_pixels,
+    0,
+    (size_t)SCREENHEIGHT * sizeof(*vita_plane_row_pixels)
+  );
 }
 
 static void Vita_RecordPlaneSpan(const draw_span_vars_t *vars)
@@ -344,7 +363,7 @@ static void Vita_RecordPlaneSpan(const draw_span_vars_t *vars)
   pixels = (unsigned int)(vars->x2 - vars->x1 + 1);
   vita_plane_pixels += pixels;
 
-  if ((unsigned int)vars->y < MAX_SCREENHEIGHT)
+  if (vars->y >= 0 && vars->y < vita_plane_row_capacity)
     vita_plane_row_pixels[vars->y] += pixels;
 }
 
