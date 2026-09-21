@@ -48,6 +48,7 @@
 #include "config.h"
 #endif
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -192,7 +193,7 @@ void dsda_RefreshLinearSky (void)
  */
 #define VITA_PLANE_WORKERS 2
 #define VITA_PLANE_BANDS 3
-#define VITA_PLANE_MT_MIN_PIXELS (96 * 1024)
+#define VITA_PLANE_MT_MIN_PIXELS (VITA_PLANE_BANDS * 64 * 1024)
 
 typedef struct
 {
