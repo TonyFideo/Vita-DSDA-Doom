@@ -55,7 +55,17 @@ jobs:
             "$VDPM" pacman -- -Rdd --noconfirm sdl2_vitagl
           fi
 
+          # libzip in the VitaSDK repository is built against the legacy
+          # OpenSSL 1.0 API (EVP_CIPHER_CTX_cleanup/HMAC_CTX_*). The current
+          # container may instead preload openssl-1.1.1, which satisfies the
+          # package dependency but cannot resolve those symbols at link time.
+          # Install the ABI that the packaged libzip was actually built for.
+          if "$VDPM" pacman -- -Q openssl-1.1.1 >/dev/null 2>&1; then
+            "$VDPM" pacman -- -Rdd --noconfirm openssl-1.1.1
+          fi
+
           "$VDPM" install \
+            openssl \
             zlib \
             sdl2 \
             sdl2_mixer \
