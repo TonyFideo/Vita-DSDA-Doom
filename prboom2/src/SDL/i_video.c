@@ -643,7 +643,7 @@ void I_FinishUpdate (void)
   Vita_VideoPresent(buffer->pixels, buffer->pitch, SCREENWIDTH, SCREENHEIGHT);
   I_HandleCapture();
   return;
-#endif
+#else
 
   if (V_IsOpenGLMode()) {
     // proff 04/05/2000: swap OpenGL buffers
@@ -697,6 +697,7 @@ void I_FinishUpdate (void)
 
   // Draw!
   SDL_RenderPresent(sdl_renderer);
+#endif
 }
 
 //
@@ -1377,7 +1378,7 @@ void I_UpdateVideoMode(void)
   Vita_Log("[VITA] video mode ready: software=%dx%d display=%dx%d\n",
            SCREENWIDTH, SCREENHEIGHT, VITA_DISPLAY_WIDTH, VITA_DISPLAY_HEIGHT);
   return;
-#endif
+#else
 
   int init_flags = SDL_WINDOW_ALLOW_HIGHDPI;
   int screen_multiply;
@@ -1632,6 +1633,7 @@ void I_UpdateVideoMode(void)
 
   src_rect.w = SCREENWIDTH;
   src_rect.h = SCREENHEIGHT;
+#endif
 }
 
 static void ActivateMouse(void)
