@@ -43,6 +43,7 @@ if(VITA AND DSDA_VITA_PRESENT_VITAGL)
   find_library(DISPLAY_STUB_LIBRARY NAMES SceDisplay_stub REQUIRED)
   find_library(APP_MGR_STUB_LIBRARY NAMES SceAppMgr_stub REQUIRED)
   find_library(COMMON_DIALOG_STUB_LIBRARY NAMES SceCommonDialog_stub REQUIRED)
+  find_library(CTRL_STUB_LIBRARY NAMES SceCtrl_stub REQUIRED)
 
   target_include_directories(dsda_dependencies INTERFACE "${VITAGL_INCLUDE_DIR}")
 
@@ -58,6 +59,7 @@ if(VITA AND DSDA_VITA_PRESENT_VITAGL)
     "${DISPLAY_STUB_LIBRARY}"
     "${APP_MGR_STUB_LIBRARY}"
     "${COMMON_DIALOG_STUB_LIBRARY}"
+    "${CTRL_STUB_LIBRARY}"
   )
 endif()
 
