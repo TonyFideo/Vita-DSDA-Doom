@@ -105,9 +105,9 @@ jobs:
         run: |
           mkdir -p dist
           for file in \
-            build-vita/vita-dsda-doom.vpk \
-            build-vita/eboot.bin \
-            build-vita/dsda-doom \
+            build-vita/src/vita-dsda-doom.vpk \
+            build-vita/src/eboot.bin \
+            build-vita/src/dsda-doom \
             build-vita/dsda-doom.wad \
             build-vita/CMakeCache.txt
           do
