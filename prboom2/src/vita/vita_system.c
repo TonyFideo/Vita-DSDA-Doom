@@ -15,6 +15,7 @@
 #include "vita/vita_system.h"
 
 #define VITA_PATH_MAX 1024
+#define VITA_MAX_IWADS 128
 
 SceUInt32 sceUserMainThreadStackSize = 1024 * 1024;
 unsigned int _newlib_heap_size_user = 128 * 1024 * 1024;
@@ -29,6 +30,10 @@ static int vita_fs_initialized;
 static char vita_data_root[VITA_PATH_MAX] = "ux0:/data/DSDA-Doom";
 static char vita_temp_dir[VITA_PATH_MAX] = "ux0:/data/DSDA-Doom/Temp";
 static char vita_log_path[VITA_PATH_MAX] = "ux0:/data/DSDA-Doom/Logs/dsda-vita.log";
+
+static char vita_iwad_paths[VITA_MAX_IWADS][VITA_PATH_MAX];
+static int vita_iwad_count;
+static int vita_selected_iwad;
 static char vita_iwad_path[VITA_PATH_MAX];
 
 static int Vita_HasWadExtension(const char *name)
@@ -43,6 +48,34 @@ static int Vita_HasWadExtension(const char *name)
     return 0;
 
   return strcasecmp(name + length - 4, ".wad") == 0;
+}
+
+static int Vita_IWADPartitionRank(const char *path)
+{
+  size_t i;
+
+  for (i = 0; i < sizeof(vita_partitions) / sizeof(vita_partitions[0]); ++i)
+  {
+    const size_t length = strlen(vita_partitions[i]);
+
+    if (!strncmp(path, vita_partitions[i], length))
+      return (int)i;
+  }
+
+  return 99;
+}
+
+static int Vita_CompareIWADPaths(const void *a, const void *b)
+{
+  const char *path_a = (const char *)a;
+  const char *path_b = (const char *)b;
+  const int rank_a = Vita_IWADPartitionRank(path_a);
+  const int rank_b = Vita_IWADPartitionRank(path_b);
+
+  if (rank_a != rank_b)
+    return rank_a - rank_b;
+
+  return strcasecmp(path_a, path_b);
 }
 
 static void Vita_MakeDir(const char *path)
@@ -108,48 +141,88 @@ static int Vita_PrepareWritableRoot(const char *partition)
   return 1;
 }
 
-static int Vita_FindFirstWadInDir(const char *dir_path, char *result, size_t result_size)
+void Vita_RefreshIWADs(void)
 {
-  DIR *dir;
-  struct dirent *entry;
-  char best_name[VITA_PATH_MAX] = {0};
+  char previous[VITA_PATH_MAX];
+  size_t partition_index;
+  int i;
 
-  dir = opendir(dir_path);
-  if (!dir)
-    return 0;
+  snprintf(previous, sizeof(previous), "%s", vita_iwad_path);
 
-  while ((entry = readdir(dir)) != NULL)
-  {
-    if (!Vita_HasWadExtension(entry->d_name))
-      continue;
-
-    if (!best_name[0] || strcasecmp(entry->d_name, best_name) < 0)
-      snprintf(best_name, sizeof(best_name), "%s", entry->d_name);
-  }
-
-  closedir(dir);
-
-  if (!best_name[0])
-    return 0;
-
-  snprintf(result, result_size, "%s/%s", dir_path, best_name);
-  return 1;
-}
-
-static void Vita_DiscoverIWAD(void)
-{
-  size_t i;
-
+  vita_iwad_count = 0;
+  vita_selected_iwad = 0;
   vita_iwad_path[0] = '\0';
 
-  for (i = 0; i < sizeof(vita_partitions) / sizeof(vita_partitions[0]); ++i)
+  for (partition_index = 0;
+       partition_index < sizeof(vita_partitions) / sizeof(vita_partitions[0]);
+       ++partition_index)
   {
     char iwad_dir[VITA_PATH_MAX];
+    DIR *dir;
+    struct dirent *entry;
 
-    snprintf(iwad_dir, sizeof(iwad_dir), "%s/data/DSDA-Doom/IWADs", vita_partitions[i]);
+    snprintf(
+      iwad_dir,
+      sizeof(iwad_dir),
+      "%s/data/DSDA-Doom/IWADs",
+      vita_partitions[partition_index]
+    );
 
-    if (Vita_FindFirstWadInDir(iwad_dir, vita_iwad_path, sizeof(vita_iwad_path)))
-      return;
+    dir = opendir(iwad_dir);
+    if (!dir)
+      continue;
+
+    while ((entry = readdir(dir)) != NULL)
+    {
+      if (!Vita_HasWadExtension(entry->d_name))
+        continue;
+
+      if (vita_iwad_count >= VITA_MAX_IWADS)
+        break;
+
+      snprintf(
+        vita_iwad_paths[vita_iwad_count],
+        sizeof(vita_iwad_paths[vita_iwad_count]),
+        "%s/%s",
+        iwad_dir,
+        entry->d_name
+      );
+      ++vita_iwad_count;
+    }
+
+    closedir(dir);
+  }
+
+  if (vita_iwad_count > 1)
+  {
+    qsort(
+      vita_iwad_paths,
+      (size_t)vita_iwad_count,
+      sizeof(vita_iwad_paths[0]),
+      Vita_CompareIWADPaths
+    );
+  }
+
+  if (previous[0])
+  {
+    for (i = 0; i < vita_iwad_count; ++i)
+    {
+      if (!strcasecmp(previous, vita_iwad_paths[i]))
+      {
+        vita_selected_iwad = i;
+        break;
+      }
+    }
+  }
+
+  if (vita_iwad_count > 0)
+  {
+    snprintf(
+      vita_iwad_path,
+      sizeof(vita_iwad_path),
+      "%s",
+      vita_iwad_paths[vita_selected_iwad]
+    );
   }
 }
 
@@ -181,7 +254,7 @@ void Vita_InitFilesystem(void)
   if (vita_fs_initialized)
     return;
 
-  Vita_DiscoverIWAD();
+  Vita_RefreshIWADs();
 
   if (vita_iwad_path[0])
   {
@@ -205,8 +278,10 @@ void Vita_InitFilesystem(void)
   Vita_Log("\n=== Vita-DSDA-Doom startup ===\n");
   Vita_Log("[VITA] data root: %s\n", vita_data_root);
   Vita_Log("[VITA] temp dir: %s\n", vita_temp_dir);
+  Vita_Log("[VITA] IWADs discovered: %d\n", vita_iwad_count);
+
   if (vita_iwad_path[0])
-    Vita_Log("[VITA] auto IWAD candidate: %s\n", vita_iwad_path);
+    Vita_Log("[VITA] default IWAD: %s\n", vita_iwad_path);
   else
     Vita_Log("[VITA] no IWAD found in ux0/uma0/ur0\n");
 }
@@ -227,6 +302,52 @@ const char *Vita_LogPath(void)
 {
   Vita_InitFilesystem();
   return vita_log_path;
+}
+
+int Vita_IWADCount(void)
+{
+  Vita_InitFilesystem();
+  return vita_iwad_count;
+}
+
+const char *Vita_IWADPathAt(int index)
+{
+  Vita_InitFilesystem();
+
+  if (index < 0 || index >= vita_iwad_count)
+    return NULL;
+
+  return vita_iwad_paths[index];
+}
+
+const char *Vita_IWADNameAt(int index)
+{
+  const char *path = Vita_IWADPathAt(index);
+  const char *slash;
+
+  if (!path)
+    return NULL;
+
+  slash = strrchr(path, '/');
+  return slash ? slash + 1 : path;
+}
+
+int Vita_SelectedIWADIndex(void)
+{
+  Vita_InitFilesystem();
+  return vita_selected_iwad;
+}
+
+void Vita_SelectIWAD(int index)
+{
+  Vita_InitFilesystem();
+
+  if (index < 0 || index >= vita_iwad_count)
+    return;
+
+  vita_selected_iwad = index;
+  snprintf(vita_iwad_path, sizeof(vita_iwad_path), "%s", vita_iwad_paths[index]);
+  Vita_Log("[VITA] launcher IWAD selected: %s\n", vita_iwad_path);
 }
 
 char *Vita_FindAutoIWAD(void)
