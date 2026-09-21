@@ -47,6 +47,10 @@
 
 #include "dsda/stretch.h"
 
+#ifdef __vita__
+#include "vita/vita_system.h"
+#endif
+
 //
 // All drawing to the view buffer is accomplished in this file.
 // The other refresh files only know about ccordinates,
@@ -179,6 +183,11 @@ static void (*R_FlushQuadColumn)(void) = R_QuadFlushError;
 
 static void R_FlushColumns(void)
 {
+#ifdef __vita__
+   if (Vita_ProfileWallDeepActive())
+      Vita_ProfileWallFlush();
+#endif
+
    if(temp_x != 4 || commontop >= commonbot)
       R_FlushWholeColumns();
    else

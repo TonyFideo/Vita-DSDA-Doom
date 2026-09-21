@@ -1134,6 +1134,7 @@ void R_RenderPlayerView (player_t* player)
   }
 
 #ifdef __vita__
+  Vita_ProfileSetWallPhase(1);
   if (Vita_ProfileActive())
     vita_prof_start = Vita_ProfileTimestamp();
 #endif
@@ -1142,10 +1143,15 @@ void R_RenderPlayerView (player_t* player)
   DSDA_REMOVE_CONTEXT(sf_bsp_nodes);
 #ifdef __vita__
   if (vita_prof_start)
-    Vita_ProfileAdd(
-      VITA_PROFILE_BSP_WALLS,
-      (unsigned int)(Vita_ProfileTimestamp() - vita_prof_start)
-    );
+  {
+    const unsigned int vita_bsp_elapsed =
+      (unsigned int)(Vita_ProfileTimestamp() - vita_prof_start);
+
+    Vita_ProfileAdd(VITA_PROFILE_BSP_WALLS, vita_bsp_elapsed);
+    if (Vita_ProfileWallDeepActive())
+      Vita_ProfileWallAdd(VITA_WALL_PROFILE_BSP_SAMPLE, vita_bsp_elapsed);
+  }
+  Vita_ProfileSetWallPhase(0);
 #endif
 
   FakeNetUpdate();

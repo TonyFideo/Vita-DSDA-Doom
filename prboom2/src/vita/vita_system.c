@@ -33,6 +33,16 @@ static int vita_profile_active;
 static unsigned int vita_profile_frames;
 static unsigned long long vita_profile_stage_us[VITA_PROFILE_COUNT];
 
+static int vita_profile_wall_phase;
+static int vita_profile_wall_deep;
+static unsigned int vita_profile_wall_sample_frames;
+static unsigned long long vita_profile_wall_us[VITA_WALL_PROFILE_COUNT];
+static unsigned int vita_profile_wall_store_calls;
+static unsigned int vita_profile_wall_segloop_calls;
+static unsigned int vita_profile_wall_column_calls;
+static unsigned int vita_profile_wall_flush_calls;
+static unsigned long long vita_profile_wall_pixels;
+
 unsigned int vita_profile_plane_cache_hits;
 unsigned int vita_profile_plane_cache_misses;
 
@@ -42,6 +52,17 @@ void Vita_ProfileReset(void)
   vita_profile_frames = 0;
   vita_profile_plane_cache_hits = 0;
   vita_profile_plane_cache_misses = 0;
+
+  vita_profile_wall_phase = 0;
+  vita_profile_wall_deep = 0;
+  vita_profile_wall_sample_frames = 0;
+  memset(vita_profile_wall_us, 0, sizeof(vita_profile_wall_us));
+  vita_profile_wall_store_calls = 0;
+  vita_profile_wall_segloop_calls = 0;
+  vita_profile_wall_column_calls = 0;
+  vita_profile_wall_flush_calls = 0;
+  vita_profile_wall_pixels = 0;
+
   vita_profile_active = 1;
 
   Vita_Log("[VITA][PROFILE] timedemo profiler started\n");
@@ -69,6 +90,79 @@ void Vita_ProfileFrame(void)
 {
   if (vita_profile_active)
     ++vita_profile_frames;
+}
+
+void Vita_ProfileSetWallPhase(int active)
+{
+  if (!vita_profile_active)
+  {
+    vita_profile_wall_phase = 0;
+    vita_profile_wall_deep = 0;
+    return;
+  }
+
+  if (active)
+  {
+    vita_profile_wall_phase = 1;
+
+    /*
+     * Deep wall timers are intentionally sampled one frame out of eight.
+     * Timing every wall range would perturb the benchmark much more than the
+     * coarse per-frame profiler. The timedemo still supplies hundreds of
+     * representative samples.
+     */
+    vita_profile_wall_deep = (vita_profile_frames & 7u) == 0u;
+    if (vita_profile_wall_deep)
+      ++vita_profile_wall_sample_frames;
+  }
+  else
+  {
+    vita_profile_wall_phase = 0;
+    vita_profile_wall_deep = 0;
+  }
+}
+
+int Vita_ProfileWallDeepActive(void)
+{
+  return vita_profile_active &&
+         vita_profile_wall_phase &&
+         vita_profile_wall_deep;
+}
+
+void Vita_ProfileWallAdd(vita_wall_profile_stage_t stage, unsigned int usec)
+{
+  if (!Vita_ProfileWallDeepActive() ||
+      stage < 0 || stage >= VITA_WALL_PROFILE_COUNT)
+    return;
+
+  vita_profile_wall_us[stage] += usec;
+}
+
+void Vita_ProfileWallStoreCall(void)
+{
+  if (Vita_ProfileWallDeepActive())
+    ++vita_profile_wall_store_calls;
+}
+
+void Vita_ProfileWallSegLoopCall(void)
+{
+  if (Vita_ProfileWallDeepActive())
+    ++vita_profile_wall_segloop_calls;
+}
+
+void Vita_ProfileWallColumn(unsigned int pixels)
+{
+  if (!Vita_ProfileWallDeepActive())
+    return;
+
+  ++vita_profile_wall_column_calls;
+  vita_profile_wall_pixels += pixels;
+}
+
+void Vita_ProfileWallFlush(void)
+{
+  if (Vita_ProfileWallDeepActive())
+    ++vita_profile_wall_flush_calls;
 }
 
 void Vita_ProfileLog(void)
@@ -131,6 +225,55 @@ void Vita_ProfileLog(void)
       : 0.0,
     vita_profile_plane_cache_hits * 2
   );
+
+  if (vita_profile_wall_sample_frames)
+  {
+    const double wall_bsp =
+      (double)vita_profile_wall_us[VITA_WALL_PROFILE_BSP_SAMPLE] /
+      vita_profile_wall_sample_frames;
+    const double wall_store =
+      (double)vita_profile_wall_us[VITA_WALL_PROFILE_STORE_RANGE] /
+      vita_profile_wall_sample_frames;
+    const double wall_seg =
+      (double)vita_profile_wall_us[VITA_WALL_PROFILE_SEG_LOOP] /
+      vita_profile_wall_sample_frames;
+    const double wall_other = wall_bsp > wall_store
+      ? wall_bsp - wall_store : 0.0;
+    const double store_setup = wall_store > wall_seg
+      ? wall_store - wall_seg : 0.0;
+
+    Vita_Log(
+      "[VITA][WALLPROFILE] sample_frames=%u stride=8 bsp_avg_us=%.2f store_avg_us=%.2f segloop_avg_us=%.2f\n",
+      vita_profile_wall_sample_frames,
+      wall_bsp,
+      wall_store,
+      wall_seg
+    );
+    Vita_Log(
+      "[VITA][WALLPROFILE] bsp_other_avg_us=%.2f store_setup_avg_us=%.2f segloop_pct_bsp=%.2f%%\n",
+      wall_other,
+      store_setup,
+      wall_bsp ? 100.0 * wall_seg / wall_bsp : 0.0
+    );
+    Vita_Log(
+      "[VITA][WALLPROFILE] store_calls=%u segloop_calls=%u columns=%u pixels=%llu flushes=%u\n",
+      vita_profile_wall_store_calls,
+      vita_profile_wall_segloop_calls,
+      vita_profile_wall_column_calls,
+      vita_profile_wall_pixels,
+      vita_profile_wall_flush_calls
+    );
+    Vita_Log(
+      "[VITA][WALLPROFILE] per_sample_frame stores=%.2f columns=%.2f pixels=%.2f flushes=%.2f pixels_per_column=%.2f\n",
+      (double)vita_profile_wall_store_calls / vita_profile_wall_sample_frames,
+      (double)vita_profile_wall_column_calls / vita_profile_wall_sample_frames,
+      (double)vita_profile_wall_pixels / vita_profile_wall_sample_frames,
+      (double)vita_profile_wall_flush_calls / vita_profile_wall_sample_frames,
+      vita_profile_wall_column_calls
+        ? (double)vita_profile_wall_pixels / vita_profile_wall_column_calls
+        : 0.0
+    );
+  }
 
   vita_profile_active = 0;
 }

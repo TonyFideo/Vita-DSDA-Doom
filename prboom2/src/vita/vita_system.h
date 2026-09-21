@@ -49,4 +49,20 @@ void Vita_ProfileAdd(vita_profile_stage_t stage, unsigned int usec);
 void Vita_ProfileFrame(void);
 void Vita_ProfileLog(void);
 
+typedef enum
+{
+  VITA_WALL_PROFILE_BSP_SAMPLE = 0,
+  VITA_WALL_PROFILE_STORE_RANGE,
+  VITA_WALL_PROFILE_SEG_LOOP,
+  VITA_WALL_PROFILE_COUNT
+} vita_wall_profile_stage_t;
+
+void Vita_ProfileSetWallPhase(int active);
+int Vita_ProfileWallDeepActive(void);
+void Vita_ProfileWallAdd(vita_wall_profile_stage_t stage, unsigned int usec);
+void Vita_ProfileWallStoreCall(void);
+void Vita_ProfileWallSegLoopCall(void);
+void Vita_ProfileWallColumn(unsigned int pixels);
+void Vita_ProfileWallFlush(void);
+
 #endif

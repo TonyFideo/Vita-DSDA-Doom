@@ -58,6 +58,10 @@
 #include "dsda/map_format.h"
 #include "dsda/render_stats.h"
 
+#ifdef __vita__
+#include "vita/vita_system.h"
+#endif
+
 // OPTIMIZE: closed two sided lines as single sided
 
 // killough 1/6/98: replaced globals with statics where appropriate
@@ -491,6 +495,16 @@ static int didsolidcol; /* True if at least one column was marked solid */
 
 static void R_RenderSegLoop (void)
 {
+#ifdef __vita__
+  unsigned int vita_wall_start = 0;
+
+  if (Vita_ProfileWallDeepActive())
+  {
+    vita_wall_start = Vita_ProfileTimestamp();
+    Vita_ProfileWallSegLoopCall();
+  }
+#endif
+
   const rpatch_t *tex_patch;
   R_DrawColumn_f colfunc = R_GetDrawColumnFunc(RDC_PIPELINE_STANDARD, RDRAW_FILTER_POINT);
   draw_column_vars_t dcvars;
@@ -577,6 +591,12 @@ static void R_RenderSegLoop (void)
       if (!fixedcolormap)
         R_ApplyMidLight(curline->sidedef);
       R_ApplyLightColormap(&dcvars, rw_scale);
+#ifdef __vita__
+      if (Vita_ProfileWallDeepActive())
+        Vita_ProfileWallColumn(
+          dcvars.yh >= dcvars.yl ? (unsigned int)(dcvars.yh - dcvars.yl + 1) : 0
+        );
+#endif
       colfunc(&dcvars);
       tex_patch = NULL;
       ceilingclip[rw_x] = viewheight;
@@ -610,6 +630,12 @@ static void R_RenderSegLoop (void)
           if (!fixedcolormap)
             R_ApplyTopLight(curline->sidedef);
           R_ApplyLightColormap(&dcvars, rw_scale);
+#ifdef __vita__
+          if (Vita_ProfileWallDeepActive())
+            Vita_ProfileWallColumn(
+              dcvars.yh >= dcvars.yl ? (unsigned int)(dcvars.yh - dcvars.yl + 1) : 0
+            );
+#endif
           colfunc(&dcvars);
           tex_patch = NULL;
           ceilingclip[rw_x] = mid;
@@ -648,6 +674,12 @@ static void R_RenderSegLoop (void)
           if (!fixedcolormap)
             R_ApplyBottomLight(curline->sidedef);
           R_ApplyLightColormap(&dcvars, rw_scale);
+#ifdef __vita__
+          if (Vita_ProfileWallDeepActive())
+            Vita_ProfileWallColumn(
+              dcvars.yh >= dcvars.yl ? (unsigned int)(dcvars.yh - dcvars.yl + 1) : 0
+            );
+#endif
           colfunc(&dcvars);
           tex_patch = NULL;
           floorclip[rw_x] = mid;
@@ -677,6 +709,14 @@ static void R_RenderSegLoop (void)
     topfrac += topstep;
     bottomfrac += bottomstep;
   }
+
+#ifdef __vita__
+  if (vita_wall_start)
+    Vita_ProfileWallAdd(
+      VITA_WALL_PROFILE_SEG_LOOP,
+      (unsigned int)(Vita_ProfileTimestamp() - vita_wall_start)
+    );
+#endif
 }
 
 //
@@ -688,6 +728,9 @@ void R_StoreWallRange(const int start, const int stop)
 {
   const int shift_bits = 1;
   int64_t dx, dy, dx1, dy1, len, dist;
+#ifdef __vita__
+  unsigned int vita_wall_start = 0;
+#endif
 
   if (ds_p == drawsegs+maxdrawsegs)   // killough 1/98 -- fix 2s line HOM
   {
@@ -709,6 +752,14 @@ void R_StoreWallRange(const int start, const int stop)
 
     return;
   }
+
+#ifdef __vita__
+  if (Vita_ProfileWallDeepActive())
+  {
+    vita_wall_start = Vita_ProfileTimestamp();
+    Vita_ProfileWallStoreCall();
+  }
+#endif
 
 #ifdef RANGECHECK
   if (start >=viewwidth || start > stop)
@@ -1072,4 +1123,12 @@ void R_StoreWallRange(const int start, const int stop)
     ds_p->bsilheight = INT_MAX;
   }
   ds_p++;
+
+#ifdef __vita__
+  if (vita_wall_start)
+    Vita_ProfileWallAdd(
+      VITA_WALL_PROFILE_STORE_RANGE,
+      (unsigned int)(Vita_ProfileTimestamp() - vita_wall_start)
+    );
+#endif
 }
