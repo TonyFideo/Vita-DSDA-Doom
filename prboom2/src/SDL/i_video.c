@@ -1291,6 +1291,94 @@ void I_InitGraphics(void)
 
 void I_UpdateVideoMode(void)
 {
+#ifdef __vita__
+  const Uint32 rmask = 0x000000ff;
+  const Uint32 gmask = 0x0000ff00;
+  const Uint32 bmask = 0x00ff0000;
+  const Uint32 amask = 0xff000000;
+
+  if (screen)
+  {
+    /*
+     * screens[0] aliases screen->pixels in the Vita direct-access path.
+     * Detach it before SDL releases the surface.
+     */
+    screens[0].data = NULL;
+    screens[0].not_on_heap = false;
+    SDL_FreeSurface(screen);
+    screen = NULL;
+  }
+
+  if (buffer)
+  {
+    SDL_FreeSurface(buffer);
+    buffer = NULL;
+  }
+
+  if (!Vita_VideoInit())
+    I_Error("VitaGL initialization failed");
+
+  if (!Vita_VideoResize(SCREENWIDTH, SCREENHEIGHT))
+    I_Error("Unable to create Vita software presentation texture %dx%d",
+            SCREENWIDTH, SCREENHEIGHT);
+
+  ACTUALHEIGHT = SCREENHEIGHT;
+  desired_fullscreen = 1;
+  exclusive_fullscreen = 0;
+
+  screen = SDL_CreateRGBSurface(
+    0, SCREENWIDTH, SCREENHEIGHT, 8, 0, 0, 0, 0
+  );
+
+  buffer = SDL_CreateRGBSurface(
+    0, SCREENWIDTH, SCREENHEIGHT, 32,
+    rmask, gmask, bmask, amask
+  );
+
+  if (!screen || !buffer)
+    I_Error("Unable to create Vita software surfaces %dx%d: %s",
+            SCREENWIDTH, SCREENHEIGHT, SDL_GetError());
+
+  SDL_FillRect(buffer, NULL, 0);
+
+  screens[0].not_on_heap = true;
+  screens[0].data = (unsigned char *)screen->pixels;
+  screens[0].pitch = screen->pitch;
+
+  V_AllocScreens();
+  R_InitBuffer(SCREENWIDTH, SCREENHEIGHT);
+
+  R_ExecuteSetViewSize();
+
+  V_SetPalette(0);
+  I_UploadNewPalette(0, true);
+
+  ST_SetResolution();
+  AM_SetResolution();
+
+  src_rect.x = 0;
+  src_rect.y = 0;
+  src_rect.w = SCREENWIDTH;
+  src_rect.h = SCREENHEIGHT;
+
+  renderer_rect.x = 0;
+  renderer_rect.y = 0;
+  renderer_rect.w = SCREENWIDTH;
+  renderer_rect.h = SCREENHEIGHT;
+
+  window_rect.x = 0;
+  window_rect.y = 0;
+  window_rect.w = VITA_DISPLAY_WIDTH;
+  window_rect.h = VITA_DISPLAY_HEIGHT;
+
+  viewport_rect = window_rect;
+  window_focused = true;
+
+  Vita_Log("[VITA] video mode ready: software=%dx%d display=%dx%d\n",
+           SCREENWIDTH, SCREENHEIGHT, VITA_DISPLAY_WIDTH, VITA_DISPLAY_HEIGHT);
+  return;
+#endif
+
   int init_flags = SDL_WINDOW_ALLOW_HIGHDPI;
   int screen_multiply;
   int render_vsync;
