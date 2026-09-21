@@ -7,6 +7,13 @@ include(DsdaDepsSetup)
 
 project("dsda-doom" VERSION 0.29.4)
 
+if(VITA)
+    if(NOT DEFINED ENV{VITASDK})
+        message(FATAL_ERROR "VITASDK environment variable is required for the Vita build")
+    endif()
+    include("$ENV{VITASDK}/share/vita.cmake")
+endif()
+
 set(dsda_is_top_project FALSE)
 if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
     set(dsda_is_top_project TRUE)
