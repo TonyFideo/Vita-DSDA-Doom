@@ -5,6 +5,7 @@
 #include "d_player.h"
 #include "r_defs.h"
 #include "r_plane.h"
+#include "p_spec.h"
 #include "r_things.h"
 #include "v_video.h"
 #include "gl_struct.h"
@@ -16,6 +17,15 @@
  * never part of the active rendering path. Keeping the API available lets the
  * common engine stay close to upstream while the Vita port is brought up.
  */
+
+/*
+ * These animation lookup tables are owned by gl_main.c upstream even though
+ * p_spec.c allocates and consumes them in both renderers. Provide their
+ * storage in software-only builds; when the OpenGL renderer is enabled the
+ * real gl_main.c definitions take over and this file is not compiled.
+ */
+TAnimItemParam *anim_flats = NULL;
+TAnimItemParam *anim_textures = NULL;
 
 int gl_drawskys = skytype_standard;
 dboolean gl_ui_lightmode_indexed = false;
