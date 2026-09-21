@@ -44,6 +44,7 @@ static unsigned char vita_palette_rgba[256 * 4];
 static void *vita_palette_gpu;
 static int vita_palette_dirty;
 static int vita_frame_presented;
+static int vita_present_state_ready;
 static int vita_launcher_framebuffer_released;
 
 static void Vita_Set2DState(void)
@@ -101,7 +102,12 @@ int Vita_VideoInit(void)
            resolution_fallback ? "resolution fallback used" : "native resolution accepted");
 
   vglWaitVblankStart(GL_TRUE);
-  Vita_Set2DState();
+
+  /*
+   * Do not submit viewport/depth/cull state before the first GXM scene.
+   * The first software-present frame opens the scene with glClear(), then
+   * installs the persistent 2D state used by later direct full-screen draws.
+   */
 
   /*
    * P8 presentation keeps Doom's native indexed framebuffer all the way to
@@ -149,6 +155,7 @@ void Vita_VideoShutdown(void)
 
   vita_palette_dirty = 0;
   vita_frame_presented = 0;
+  vita_present_state_ready = 0;
 
   /*
    * vitaGL currently owns process-lifetime GXM state. There is no public
@@ -215,6 +222,7 @@ int Vita_VideoResize(int width, int height)
   vita_frame_texture_index = 0;
   vita_texture_width = width;
   vita_texture_height = height;
+  vita_present_state_ready = 0;
 
   Vita_Log(
     "[VITA] software presentation textures: %dx%d P8 direct, ring=%d\n",
@@ -258,6 +266,7 @@ void Vita_VideoPresent(const void *indexed_pixels, int pitch, int width, int hei
   float dst_height;
   float x0;
   float y0;
+  int covers_display;
   GLfloat vertices[8];
   static const GLfloat texcoords[8] = {
     0.0f, 0.0f,
@@ -304,9 +313,6 @@ void Vita_VideoPresent(const void *indexed_pixels, int pitch, int width, int hei
   );
   glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
 
-  Vita_Set2DState();
-  glClear(GL_COLOR_BUFFER_BIT);
-
   scale = (float)VITA_DISPLAY_WIDTH / (float)width;
   if ((float)height * scale > (float)VITA_DISPLAY_HEIGHT)
     scale = (float)VITA_DISPLAY_HEIGHT / (float)height;
@@ -315,6 +321,28 @@ void Vita_VideoPresent(const void *indexed_pixels, int pitch, int width, int hei
   dst_height = (float)height * scale;
   x0 = ((float)VITA_DISPLAY_WIDTH - dst_width) * 0.5f;
   y0 = ((float)VITA_DISPLAY_HEIGHT - dst_height) * 0.5f;
+
+  /*
+   * If the source has the display's exact aspect ratio, the textured quad
+   * overwrites every color pixel. Clearing the 960x544 target first is then
+   * entirely redundant. Keep one clear when entering/reconfiguring software
+   * presentation so a valid GXM scene exists before Vita_Set2DState() touches
+   * viewport/cull/depth state. Thereafter glDrawArrays() opens the scene on
+   * full-screen frames itself; letterboxed modes still clear to black.
+   */
+  covers_display =
+    width * VITA_DISPLAY_HEIGHT == height * VITA_DISPLAY_WIDTH;
+
+  if (!vita_present_state_ready)
+  {
+    glClear(GL_COLOR_BUFFER_BIT);
+    Vita_Set2DState();
+    vita_present_state_ready = 1;
+  }
+  else if (!covers_display)
+  {
+    glClear(GL_COLOR_BUFFER_BIT);
+  }
 
   vertices[0] = x0;
   vertices[1] = y0;
