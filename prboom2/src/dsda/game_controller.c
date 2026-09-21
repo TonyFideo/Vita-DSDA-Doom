@@ -26,6 +26,10 @@
 
 #include "game_controller.h"
 
+#ifdef __vita__
+#include "vita/vita_system.h"
+#endif
+
 static int use_game_controller;
 static SDL_GameController* game_controller;
 
@@ -205,6 +209,16 @@ void dsda_InitGameController(void) {
 
   num_joysticks = SDL_NumJoysticks();
 
+#ifdef __vita__
+  Vita_Log("[VITA] SDL joysticks: %d\n", num_joysticks);
+  if (num_joysticks > 0)
+  {
+    Vita_Log("[VITA] joystick 0: %s, gamecontroller=%d\n",
+             SDL_JoystickNameForIndex(0) ? SDL_JoystickNameForIndex(0) : "(null)",
+             SDL_IsGameController(0));
+  }
+#endif
+
   if (use_game_controller > num_joysticks) {
     lprintf(LO_WARN, "dsda_InitGameController: invalid joystick %d\n",
             use_game_controller);
@@ -226,4 +240,8 @@ void dsda_InitGameController(void) {
   }
 
   lprintf(LO_DEBUG, "Opened game controller %s\n", SDL_GameControllerName(game_controller));
+#ifdef __vita__
+  Vita_Log("[VITA] opened controller: %s\n",
+           SDL_GameControllerName(game_controller) ? SDL_GameControllerName(game_controller) : "(null)");
+#endif
 }
