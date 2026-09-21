@@ -44,6 +44,15 @@ jobs:
             VDPM=/tmp/vdpm/vdpm
           fi
 
+          export VDPM_NONINTERACTIVE=1
+
+          # The VitaSDK container currently ships sdl2_vitagl by default.
+          # This port owns the VitaGL context itself, so use regular SDL2 for
+          # input/audio/surfaces and remove the mutually-exclusive package.
+          if "$VDPM" info sdl2_vitagl >/dev/null 2>&1; then
+            "$VDPM" remove sdl2_vitagl || true
+          fi
+
           "$VDPM" install \
             zlib \
             sdl2 \
