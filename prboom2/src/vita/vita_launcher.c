@@ -495,13 +495,123 @@ static void Vita_LauncherPWADLabel(int selector_index, char *label, size_t label
   }
 }
 
+static uint32_t Vita_LauncherReadLE32(const unsigned char *p)
+{
+  return (uint32_t)p[0] |
+         ((uint32_t)p[1] << 8) |
+         ((uint32_t)p[2] << 16) |
+         ((uint32_t)p[3] << 24);
+}
+
+static int Vita_LauncherFindFirstDemoLump(
+  const char *wad_path,
+  char *demo_name,
+  size_t demo_name_size)
+{
+  unsigned char header[12];
+  unsigned char entry[16];
+  uint32_t num_lumps;
+  uint32_t directory_offset;
+  FILE *fp;
+  uint32_t i;
+
+  if (!wad_path || !*wad_path || !demo_name || demo_name_size < 2)
+    return 0;
+
+  fp = fopen(wad_path, "rb");
+  if (!fp)
+    return 0;
+
+  if (fread(header, 1, sizeof(header), fp) != sizeof(header) ||
+      (memcmp(header, "IWAD", 4) && memcmp(header, "PWAD", 4)))
+  {
+    fclose(fp);
+    return 0;
+  }
+
+  num_lumps = Vita_LauncherReadLE32(header + 4);
+  directory_offset = Vita_LauncherReadLE32(header + 8);
+
+  /* Avoid following a corrupt directory into arbitrary seeks. */
+  if (!num_lumps || num_lumps > 100000 ||
+      fseek(fp, (long)directory_offset, SEEK_SET) != 0)
+  {
+    fclose(fp);
+    return 0;
+  }
+
+  for (i = 0; i < num_lumps; ++i)
+  {
+    char name[9];
+    int j;
+
+    if (fread(entry, 1, sizeof(entry), fp) != sizeof(entry))
+      break;
+
+    memcpy(name, entry + 8, 8);
+    name[8] = '\0';
+
+    for (j = 0; j < 8 && name[j]; ++j)
+      name[j] = (char)toupper((unsigned char)name[j]);
+
+    /*
+     * Vanilla Doom/Heretic demo lumps are DEMO1, DEMO2, ... . Accept any
+     * DEMO* name so PWADs using DEMO5+ also work, while preserving directory
+     * order: the first matching lump in the selected WAD is the benchmark.
+     */
+    if (!strncmp(name, "DEMO", 4) && name[4])
+    {
+      snprintf(demo_name, demo_name_size, "%s", name);
+      fclose(fp);
+      return 1;
+    }
+  }
+
+  fclose(fp);
+  return 0;
+}
+
+static int Vita_LauncherResolveTimedemo(
+  int iwad_index,
+  int pwad_index,
+  char *demo_name,
+  size_t demo_name_size,
+  const char **source_wad)
+{
+  const char *path;
+
+  if (source_wad)
+    *source_wad = NULL;
+
+  if (pwad_index >= 0)
+  {
+    path = Vita_PWADPathAt(pwad_index);
+    if (Vita_LauncherFindFirstDemoLump(path, demo_name, demo_name_size))
+    {
+      if (source_wad)
+        *source_wad = path;
+      return 1;
+    }
+  }
+
+  path = Vita_IWADPathAt(iwad_index);
+  if (Vita_LauncherFindFirstDemoLump(path, demo_name, demo_name_size))
+  {
+    if (source_wad)
+      *source_wad = path;
+    return 1;
+  }
+
+  return 0;
+}
+
 static void Vita_LauncherDrawRow(
   int row,
   int selected,
   const char *name,
   const char *value)
 {
-  const float y = 146.0f + row * 58.0f;
+  const float y = 136.0f + row * 52.0f;
 
   if (selected)
   {
@@ -548,6 +658,7 @@ static void Vita_LauncherDraw(
   int resolution_index,
   int iwad_index,
   int pwad_selector_index,
+  int timedemo_enabled,
   const char *status)
 {
   char iwad_label[64];
@@ -603,14 +714,21 @@ static void Vita_LauncherDraw(
   Vita_LauncherDrawRow(
     4,
     selected_row == 4,
+    "TIMEDEMO",
+    timedemo_enabled ? "ACTIVADO" : "DESACTIVADO"
+  );
+
+  Vita_LauncherDrawRow(
+    5,
+    selected_row == 5,
     "INICIAR JUEGO",
     NULL
   );
 
-  if (selected_row == 4)
+  if (selected_row == 5)
   {
     Vita_LauncherDrawText(
-      680.0f, 378.0f, 1.10f, "[ X ]",
+      680.0f, 406.0f, 1.10f, "[ X ]",
       0.70f, 0.90f, 1.0f, 1.0f
     );
   }
@@ -669,6 +787,7 @@ int Vita_LauncherRun(void)
   int iwad_index;
   int pwad_count;
   int pwad_selector_index = 0;
+  int timedemo_enabled = 0;
   char status[96] = {0};
 
   Vita_RefreshIWADs();
@@ -705,13 +824,13 @@ int Vita_LauncherRun(void)
 
     if (pressed & SCE_CTRL_UP)
     {
-      selected_row = Vita_LauncherWrap(selected_row - 1, 5);
+      selected_row = Vita_LauncherWrap(selected_row - 1, 6);
       status[0] = '\0';
     }
 
     if (pressed & SCE_CTRL_DOWN)
     {
-      selected_row = Vita_LauncherWrap(selected_row + 1, 5);
+      selected_row = Vita_LauncherWrap(selected_row + 1, 6);
       status[0] = '\0';
     }
 
@@ -753,6 +872,10 @@ int Vita_LauncherRun(void)
           Vita_SelectPWAD(pwad_selector_index - 1);
           break;
 
+        case 4:
+          timedemo_enabled = !timedemo_enabled;
+          break;
+
         default:
           break;
       }
@@ -761,6 +884,11 @@ int Vita_LauncherRun(void)
     if (pressed & SCE_CTRL_CROSS)
     {
       if (selected_row == 4)
+      {
+        timedemo_enabled = !timedemo_enabled;
+        status[0] = '\0';
+      }
+      else if (selected_row == 5)
       {
         if (iwad_count <= 0)
         {
@@ -785,6 +913,8 @@ int Vita_LauncherRun(void)
 
           const int pwad_index = pwad_selector_index - 1;
           const char *pwad_path = NULL;
+          const char *timedemo_source = NULL;
+          char timedemo_lump[9] = {0};
 
           Vita_SelectIWAD(iwad_index);
           Vita_SelectPWAD(pwad_index);
@@ -796,17 +926,48 @@ int Vita_LauncherRun(void)
               dsda_AppendStringArg(dsda_arg_file, pwad_path);
           }
 
+          if (timedemo_enabled)
+          {
+            if (!Vita_LauncherResolveTimedemo(
+                  iwad_index,
+                  pwad_index,
+                  timedemo_lump,
+                  sizeof(timedemo_lump),
+                  &timedemo_source))
+            {
+              snprintf(
+                status,
+                sizeof(status),
+                "TIMEDEMO: NO SE ENCONTRO NINGUN LUMP DEMO*"
+              );
+              Vita_Log(
+                "[VITA] timedemo requested but no DEMO* lump was found in PWAD/IWAD\n"
+              );
+              continue;
+            }
+
+            dsda_AppendStringArg(dsda_arg_timedemo, timedemo_lump);
+            Vita_Log(
+              "[VITA] timedemo selected: lump=%s source=%s\n",
+              timedemo_lump,
+              timedemo_source ? timedemo_source : "unknown"
+            );
+          }
+
           Vita_VideoSetInternalResolution(
             resolution->width,
             resolution->height
           );
 
           Vita_Log(
-            "[VITA] launcher start: renderer=software resolution=%dx%d IWAD=%s PWAD=%s\n",
+            "[VITA] launcher start: renderer=software resolution=%dx%d IWAD=%s PWAD=%s timedemo=%s%s%s\n",
             resolution->width,
             resolution->height,
             Vita_IWADPathAt(iwad_index),
-            pwad_path ? pwad_path : "none"
+            pwad_path ? pwad_path : "none",
+            timedemo_enabled ? "on" : "off",
+            timedemo_enabled ? " lump=" : "",
+            timedemo_enabled ? timedemo_lump : ""
           );
 
           Vita_Log("[VITA] launcher handoff: retaining framebuffer until first VitaGL flip\n");
@@ -826,6 +987,7 @@ int Vita_LauncherRun(void)
       resolution_index,
       iwad_index,
       pwad_selector_index,
+      timedemo_enabled,
       status
     );
   }
