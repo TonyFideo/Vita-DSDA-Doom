@@ -48,14 +48,6 @@
 #include "config.h"
 #endif
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-#ifdef __vita__
-#include <psp2/kernel/threadmgr.h>
-#endif
-
 #include "z_zone.h"  /* memory allocation wrappers -- killough */
 
 #include "doomstat.h"
@@ -178,260 +170,6 @@ void dsda_RefreshLinearSky (void)
 // R_MapPlane
 //
 
-#ifdef __vita__
-/*
- * Vita software-plane rasterizer
- * ------------------------------
- * BSP traversal, clipping and span generation stay on the main thread.
- * Only the final R_DrawSpan calls are replayed in parallel. A span writes
- * exactly one framebuffer row, so assigning disjoint row bands to workers
- * guarantees that two cores never touch the same pixel. Commands inside a
- * row are scanned in their original emission order.
- *
- * This is deliberately enabled only for >=640-wide software modes. Small
- * modes already hit 60 fps and do not benefit from the record/dispatch cost.
- */
-#define VITA_PLANE_WORKERS 2
-#define VITA_PLANE_BANDS 3
-#define VITA_PLANE_MT_MIN_PIXELS (VITA_PLANE_BANDS * 64 * 1024)
-
-typedef struct
-{
-  draw_span_vars_t vars;
-} vita_plane_span_cmd_t;
-
-static vita_plane_span_cmd_t *vita_plane_cmds;
-static size_t vita_plane_cmd_count;
-static size_t vita_plane_cmd_capacity;
-static unsigned int *vita_plane_row_pixels;
-static int vita_plane_row_capacity;
-static unsigned int vita_plane_pixels;
-static int vita_plane_recording;
-
-static SceUID vita_plane_start_sema[VITA_PLANE_WORKERS] = { -1, -1 };
-static SceUID vita_plane_done_sema = -1;
-static SceUID vita_plane_threads[VITA_PLANE_WORKERS] = { -1, -1 };
-static int vita_plane_worker_ids[VITA_PLANE_WORKERS] = { 0, 1 };
-static int vita_plane_band_y0[VITA_PLANE_BANDS];
-static int vita_plane_band_y1[VITA_PLANE_BANDS];
-static int vita_plane_pool_ready;
-
-static void Vita_DrawPlaneBand(int y0, int y1)
-{
-  size_t i;
-
-  if (y0 > y1)
-    return;
-
-  for (i = 0; i < vita_plane_cmd_count; ++i)
-  {
-    draw_span_vars_t *vars = &vita_plane_cmds[i].vars;
-
-    if (vars->y >= y0 && vars->y <= y1)
-      R_DrawSpan(vars);
-  }
-}
-
-static int Vita_PlaneWorker(SceSize args, void *argp)
-{
-  int id = 0;
-
-  if (argp && args >= sizeof(id))
-    memcpy(&id, argp, sizeof(id));
-
-  if (id < 0 || id >= VITA_PLANE_WORKERS)
-    return sceKernelExitDeleteThread(0);
-
-  for (;;)
-  {
-    if (sceKernelWaitSema(vita_plane_start_sema[id], 1, NULL) < 0)
-      break;
-
-    Vita_DrawPlaneBand(vita_plane_band_y0[id], vita_plane_band_y1[id]);
-    sceKernelSignalSema(vita_plane_done_sema, 1);
-  }
-
-  return sceKernelExitDeleteThread(0);
-}
-
-static int Vita_InitPlaneWorkers(void)
-{
-  static const int affinities[VITA_PLANE_WORKERS] = {
-    SCE_KERNEL_CPU_MASK_USER_1,
-    SCE_KERNEL_CPU_MASK_USER_2
-  };
-  int priority;
-  int i;
-
-  if (vita_plane_pool_ready)
-    return 1;
-
-  priority = sceKernelGetThreadCurrentPriority();
-  if (priority < 0)
-    priority = 0x10000100;
-
-  vita_plane_done_sema =
-    sceKernelCreateSema("dsda_plane_done", 0, 0, VITA_PLANE_WORKERS, NULL);
-  if (vita_plane_done_sema < 0)
-    return 0;
-
-  for (i = 0; i < VITA_PLANE_WORKERS; ++i)
-  {
-    char sema_name[32];
-    char thread_name[32];
-
-    snprintf(sema_name, sizeof(sema_name), "dsda_plane_start_%d", i);
-    snprintf(thread_name, sizeof(thread_name), "dsda_plane_worker_%d", i);
-
-    vita_plane_start_sema[i] =
-      sceKernelCreateSema(sema_name, 0, 0, 1, NULL);
-    if (vita_plane_start_sema[i] < 0)
-      return 0;
-
-    vita_plane_threads[i] = sceKernelCreateThread(
-      thread_name,
-      Vita_PlaneWorker,
-      priority,
-      64 * 1024,
-      0,
-      affinities[i],
-      NULL
-    );
-    if (vita_plane_threads[i] < 0)
-      return 0;
-
-    if (sceKernelStartThread(
-          vita_plane_threads[i],
-          sizeof(vita_plane_worker_ids[i]),
-          &vita_plane_worker_ids[i]) < 0)
-      return 0;
-  }
-
-  vita_plane_pool_ready = 1;
-  lprintf(LO_INFO, "[VITA] software planes: 3-core row-band rasterizer enabled\n");
-  return 1;
-}
-
-static void Vita_ResetPlaneCommands(void)
-{
-  if (vita_plane_row_capacity < SCREENHEIGHT)
-  {
-    unsigned int *new_rows = (unsigned int *)realloc(
-      vita_plane_row_pixels,
-      (size_t)SCREENHEIGHT * sizeof(*new_rows)
-    );
-
-    if (!new_rows)
-      I_Error("Vita_ResetPlaneCommands: failed to grow row counters");
-
-    vita_plane_row_pixels = new_rows;
-    vita_plane_row_capacity = SCREENHEIGHT;
-  }
-
-  vita_plane_cmd_count = 0;
-  vita_plane_pixels = 0;
-  memset(
-    vita_plane_row_pixels,
-    0,
-    (size_t)SCREENHEIGHT * sizeof(*vita_plane_row_pixels)
-  );
-}
-
-static void Vita_RecordPlaneSpan(const draw_span_vars_t *vars)
-{
-  vita_plane_span_cmd_t *new_cmds;
-  size_t new_capacity;
-  unsigned int pixels;
-
-  if (vita_plane_cmd_count == vita_plane_cmd_capacity)
-  {
-    new_capacity = vita_plane_cmd_capacity ? vita_plane_cmd_capacity * 2 : 2048;
-    new_cmds = (vita_plane_span_cmd_t *)realloc(
-      vita_plane_cmds,
-      new_capacity * sizeof(*new_cmds)
-    );
-
-    if (!new_cmds)
-      I_Error("Vita_RecordPlaneSpan: failed to grow command buffer");
-
-    vita_plane_cmds = new_cmds;
-    vita_plane_cmd_capacity = new_capacity;
-  }
-
-  vita_plane_cmds[vita_plane_cmd_count++].vars = *vars;
-
-  pixels = (unsigned int)(vars->x2 - vars->x1 + 1);
-  vita_plane_pixels += pixels;
-
-  if (vars->y >= 0 && vars->y < vita_plane_row_capacity)
-    vita_plane_row_pixels[vars->y] += pixels;
-}
-
-static int Vita_BuildPlaneBands(void)
-{
-  const unsigned int target1 = vita_plane_pixels / VITA_PLANE_BANDS;
-  const unsigned int target2 = (vita_plane_pixels * 2u) / VITA_PLANE_BANDS;
-  unsigned int running = 0;
-  int cut1 = -1;
-  int cut2 = -1;
-  int y;
-
-  for (y = 0; y < SCREENHEIGHT; ++y)
-  {
-    running += vita_plane_row_pixels[y];
-
-    if (cut1 < 0 && running >= target1)
-      cut1 = y;
-    if (cut2 < 0 && running >= target2)
-    {
-      cut2 = y;
-      break;
-    }
-  }
-
-  if (cut1 < 0 || cut2 <= cut1 || cut2 >= SCREENHEIGHT - 1)
-    return 0;
-
-  vita_plane_band_y0[0] = 0;
-  vita_plane_band_y1[0] = cut1;
-  vita_plane_band_y0[1] = cut1 + 1;
-  vita_plane_band_y1[1] = cut2;
-  vita_plane_band_y0[2] = cut2 + 1;
-  vita_plane_band_y1[2] = SCREENHEIGHT - 1;
-  return 1;
-}
-
-static void Vita_ReplayPlaneCommands(void)
-{
-  int i;
-
-  if (!vita_plane_cmd_count)
-    return;
-
-  /*
-   * Small workloads are faster serially. This also means 320x200 follows the
-   * original immediate raster path and pays no worker synchronization cost.
-   */
-  if (vita_plane_pixels < VITA_PLANE_MT_MIN_PIXELS ||
-      !Vita_BuildPlaneBands() ||
-      !Vita_InitPlaneWorkers())
-  {
-    for (i = 0; i < (int)vita_plane_cmd_count; ++i)
-      R_DrawSpan(&vita_plane_cmds[i].vars);
-    return;
-  }
-
-  for (i = 0; i < VITA_PLANE_WORKERS; ++i)
-    sceKernelSignalSema(vita_plane_start_sema[i], 1);
-
-  /* The main thread owns the third band while cores 1 and 2 rasterize theirs. */
-  Vita_DrawPlaneBand(vita_plane_band_y0[2], vita_plane_band_y1[2]);
-
-  for (i = 0; i < VITA_PLANE_WORKERS; ++i)
-    sceKernelWaitSema(vita_plane_done_sema, 1, NULL);
-}
-#endif
-
 static void R_MapPlane(int y, int x1, int x2, draw_span_vars_t *dsvars)
 {
   int64_t den;
@@ -488,14 +226,7 @@ static void R_MapPlane(int y, int x1, int x2, draw_span_vars_t *dsvars)
   dsvars->x2 = x2;
 
   if (V_IsSoftwareMode())
-  {
-#ifdef __vita__
-    if (vita_plane_recording)
-      Vita_RecordPlaneSpan(dsvars);
-    else
-#endif
-      R_DrawSpan(dsvars);
-  }
+    R_DrawSpan(dsvars);
 }
 
 //
@@ -1056,18 +787,6 @@ void R_DrawPlanes (void)
 {
   visplane_t *pl;
   int i;
-
-#ifdef __vita__
-  /*
-   * Keep low resolutions on the zero-overhead original path. At high
-   * resolutions, span generation remains serial and deterministic; only the
-   * final writes into disjoint framebuffer rows are deferred.
-   */
-  vita_plane_recording = V_IsSoftwareMode() && SCREENWIDTH >= 640;
-  if (vita_plane_recording)
-    Vita_ResetPlaneCommands();
-#endif
-
   for (i=0;i<MAXVISPLANES;i++)
     for (pl=visplanes[i]; pl; pl=pl->next)
     {
@@ -1075,12 +794,4 @@ void R_DrawPlanes (void)
 
       R_DoDrawPlane(pl);
     }
-
-#ifdef __vita__
-  if (vita_plane_recording)
-  {
-    vita_plane_recording = 0;
-    Vita_ReplayPlaneCommands();
-  }
-#endif
 }
