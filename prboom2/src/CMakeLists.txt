@@ -593,7 +593,17 @@ function(AddGameExecutable TARGET SOURCES)
             -fsigned-char
         )
 
-        target_link_options(${TARGET} PRIVATE -Wl,-q)
+        # vita-elf-create appends SCE module metadata to the first LOAD
+        # segment. With modern binutils the default 4 KiB max page size can
+        # leave too little virtual-address padding before the RW LOAD segment
+        # (e.g. "Cannot allocate N bytes for SCE data ... segment overlaps").
+        # 64 KiB is a commonly used Vita linker layout and leaves sufficient
+        # room without changing the engine runtime memory model.
+        target_link_options(${TARGET}
+            PRIVATE
+            -Wl,-q
+            -Wl,-z,max-page-size=0x10000
+        )
     endif()
 
     if(VITA)
