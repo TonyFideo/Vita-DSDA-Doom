@@ -1364,8 +1364,8 @@ void I_UpdateVideoMode(void)
 
   renderer_rect.x = 0;
   renderer_rect.y = 0;
-  renderer_rect.w = SCREENWIDTH;
-  renderer_rect.h = SCREENHEIGHT;
+  renderer_rect.w = VITA_DISPLAY_WIDTH;
+  renderer_rect.h = VITA_DISPLAY_HEIGHT;
 
   window_rect.x = 0;
   window_rect.y = 0;
@@ -1849,6 +1849,14 @@ static void ApplyWindowResize(SDL_Event *resize_event)
 
 void I_SetWindowRect()
 {
+#ifdef __vita__
+  window_rect.x = 0;
+  window_rect.y = 0;
+  window_rect.w = VITA_DISPLAY_WIDTH;
+  window_rect.h = VITA_DISPLAY_HEIGHT;
+
+  renderer_rect = window_rect;
+#else
   SDL_GetWindowPosition(sdl_window, &window_rect.x, &window_rect.y);
   SDL_GetWindowSize(sdl_window, &window_rect.w, &window_rect.h);
 
@@ -1856,6 +1864,7 @@ void I_SetWindowRect()
     SDL_GL_GetDrawableSize(sdl_window, &renderer_rect.w, &renderer_rect.h);
   else
     SDL_GetRendererOutputSize(sdl_renderer, &renderer_rect.w, &renderer_rect.h);
+#endif
 }
 
 void I_SetViewportRect()
