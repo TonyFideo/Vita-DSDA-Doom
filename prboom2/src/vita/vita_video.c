@@ -53,25 +53,43 @@ static void Vita_Set2DState(void)
 
 int Vita_VideoInit(void)
 {
+  GLboolean resolution_fallback;
+
   if (vita_video_initialized)
     return 1;
 
-  if (!vglInitExtended(
-        0,
-        VITA_DISPLAY_WIDTH,
-        VITA_DISPLAY_HEIGHT,
-        16 * 1024 * 1024,
-        SCE_GXM_MULTISAMPLE_NONE))
-  {
-    Vita_Log("[VITA] ERROR: vglInitExtended failed\n");
-    return 0;
-  }
+  Vita_Log("[VITA] initializing VitaGL at %dx%d\n",
+           VITA_DISPLAY_WIDTH, VITA_DISPLAY_HEIGHT);
+
+  /*
+   * Important: vitaGL's vglInitExtended() return value is NOT a generic
+   * success/failure boolean. In the pinned vitaGL revision it returns
+   * res_fallback from vglInitWithCustomSizes():
+   *
+   *   GL_FALSE = requested framebuffer resolution was accepted (normal)
+   *   GL_TRUE  = resolution exceeded the display maximum and was clamped
+   *
+   * The old Vita port treated GL_FALSE as failure and therefore aborted every
+   * normal 960x544 startup immediately after vitaGL had initialized.
+   */
+  resolution_fallback = vglInitExtended(
+    0,
+    VITA_DISPLAY_WIDTH,
+    VITA_DISPLAY_HEIGHT,
+    16 * 1024 * 1024,
+    SCE_GXM_MULTISAMPLE_NONE
+  );
+
+  Vita_Log("[VITA] vglInitExtended returned %d (%s)\n",
+           resolution_fallback,
+           resolution_fallback ? "resolution fallback used" : "native resolution accepted");
 
   vglWaitVblankStart(GL_TRUE);
   Vita_Set2DState();
 
   vita_video_initialized = 1;
-  Vita_Log("[VITA] VitaGL initialized at %dx%d\n", VITA_DISPLAY_WIDTH, VITA_DISPLAY_HEIGHT);
+  Vita_Log("[VITA] VitaGL initialized at %dx%d\n",
+           VITA_DISPLAY_WIDTH, VITA_DISPLAY_HEIGHT);
 
   return Vita_VideoResize(vita_internal_width, vita_internal_height);
 }
