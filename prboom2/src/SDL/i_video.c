@@ -580,6 +580,14 @@ static void I_UploadNewPalette(int pal, int force)
 #endif
 
   SDL_SetPaletteColors(screen->format->palette, playpal_data->colours + 256 * pal, 0, 256);
+
+#ifdef __vita__
+  /*
+   * The Vita presenter consumes the same RGBA byte layout as SDL_Color.
+   * Pass the active PLAYPAL directly to its persistent P8 palette.
+   */
+  Vita_VideoSetPalette(playpal_data->colours + 256 * pal);
+#endif
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -632,7 +640,7 @@ static int newpal = 0;
 void I_FinishUpdate (void)
 {
 #ifdef __vita__
-  if (!screen || !buffer)
+  if (!screen)
     return;
 
   if (newpal != NO_PALETTE_CHANGE) {
@@ -640,8 +648,7 @@ void I_FinishUpdate (void)
     newpal = NO_PALETTE_CHANGE;
   }
 
-  SDL_LowerBlit(screen, &src_rect, buffer, &src_rect);
-  Vita_VideoPresent(buffer->pixels, buffer->pitch, SCREENWIDTH, SCREENHEIGHT);
+  Vita_VideoPresent(screen->pixels, screen->pitch, SCREENWIDTH, SCREENHEIGHT);
   I_HandleCapture();
   return;
 #else

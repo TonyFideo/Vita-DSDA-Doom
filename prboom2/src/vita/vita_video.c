@@ -30,8 +30,10 @@ static int vita_internal_height = VITA_SOFTWARE_HEIGHT;
 static int vita_texture_width;
 static int vita_texture_height;
 static GLuint vita_frame_texture;
-static unsigned char *vita_upload_buffer;
-static size_t vita_upload_buffer_size;
+static unsigned char vita_palette_rgba[256 * 4];
+static void *vita_palette_gpu;
+static int vita_palette_dirty;
+static int vita_frame_presented;
 static int vita_launcher_framebuffer_released;
 
 static void Vita_Set2DState(void)
@@ -91,6 +93,28 @@ int Vita_VideoInit(void)
   vglWaitVblankStart(GL_TRUE);
   Vita_Set2DState();
 
+  /*
+   * P8 presentation keeps Doom's native indexed framebuffer all the way to
+   * the GPU. vitaGL maps its allocator memory for GXM, so a small aligned
+   * palette buffer can be bound directly to the P8 texture.
+   */
+  vita_palette_gpu = vglMemalign(SCE_GXM_PALETTE_ALIGNMENT, sizeof(vita_palette_rgba));
+  if (!vita_palette_gpu)
+  {
+    Vita_Log("[VITA] failed to allocate P8 palette buffer\n");
+    return 0;
+  }
+
+  memset(vita_palette_rgba, 0, sizeof(vita_palette_rgba));
+  {
+    int i;
+    for (i = 0; i < 256; ++i)
+      vita_palette_rgba[i * 4 + 3] = 255;
+  }
+  memcpy(vita_palette_gpu, vita_palette_rgba, sizeof(vita_palette_rgba));
+  vita_palette_dirty = 0;
+  vita_frame_presented = 0;
+
   vita_video_initialized = 1;
   Vita_Log("[VITA] VitaGL initialized at %dx%d\n",
            VITA_DISPLAY_WIDTH, VITA_DISPLAY_HEIGHT);
@@ -106,9 +130,14 @@ void Vita_VideoShutdown(void)
     vita_frame_texture = 0;
   }
 
-  free(vita_upload_buffer);
-  vita_upload_buffer = NULL;
-  vita_upload_buffer_size = 0;
+  if (vita_palette_gpu)
+  {
+    vglFree(vita_palette_gpu);
+    vita_palette_gpu = NULL;
+  }
+
+  vita_palette_dirty = 0;
+  vita_frame_presented = 0;
 
   /*
    * vitaGL currently owns process-lifetime GXM state. There is no public
@@ -137,67 +166,72 @@ int Vita_VideoResize(int width, int height)
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-  glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
   glTexImage2D(
     GL_TEXTURE_2D,
     0,
-    GL_RGBA,
+    GL_COLOR_INDEX8_EXT,
     width,
     height,
     0,
-    GL_RGBA,
+    GL_RED,
     GL_UNSIGNED_BYTE,
     NULL
   );
 
+  if (!vglGetGxmTexture(GL_TEXTURE_2D) ||
+      sceGxmTextureSetPalette(vglGetGxmTexture(GL_TEXTURE_2D), vita_palette_gpu) < 0)
+  {
+    Vita_Log("[VITA] failed to bind P8 palette to presentation texture\n");
+    glDeleteTextures(1, &vita_frame_texture);
+    vita_frame_texture = 0;
+    return 0;
+  }
+
   vita_texture_width = width;
   vita_texture_height = height;
 
-  Vita_Log("[VITA] software presentation texture: %dx%d RGBA8\n", width, height);
+  Vita_Log("[VITA] software presentation texture: %dx%d P8 direct\n", width, height);
   return 1;
 }
 
-static const void *Vita_ContiguousPixels(
-  const void *pixels,
-  int pitch,
-  int width,
-  int height)
+void Vita_VideoSetPalette(const void *rgba_palette)
 {
-  const int row_bytes = width * 4;
-  size_t required;
-  int y;
+  if (!rgba_palette)
+    return;
 
-  if (pitch == row_bytes)
-    return pixels;
-
-  required = (size_t)row_bytes * height;
-
-  if (vita_upload_buffer_size < required)
-  {
-    unsigned char *new_buffer = realloc(vita_upload_buffer, required);
-
-    if (!new_buffer)
-      return NULL;
-
-    vita_upload_buffer = new_buffer;
-    vita_upload_buffer_size = required;
-  }
-
-  for (y = 0; y < height; ++y)
-  {
-    memcpy(
-      vita_upload_buffer + (size_t)y * row_bytes,
-      (const unsigned char *)pixels + (size_t)y * pitch,
-      row_bytes
-    );
-  }
-
-  return vita_upload_buffer;
+  memcpy(vita_palette_rgba, rgba_palette, sizeof(vita_palette_rgba));
+  vita_palette_dirty = 1;
 }
 
-void Vita_VideoPresent(const void *rgba_pixels, int pitch, int width, int height)
+static void Vita_ApplyPendingPalette(void)
 {
-  const void *upload_pixels;
+  SceGxmTexture *texture;
+
+  if (!vita_palette_dirty || !vita_palette_gpu || !vita_frame_texture)
+    return;
+
+  /*
+   * The P8 palette is shared by submitted frames. Palette changes are rare
+   * (damage/bonus/gamma), so wait only on those changes before modifying the
+   * GPU-visible table. This avoids any chance of a previous frame sampling a
+   * partially updated palette while keeping the normal frame path stall-free.
+   */
+  if (vita_frame_presented)
+    sceGxmDisplayQueueFinish();
+
+  memcpy(vita_palette_gpu, vita_palette_rgba, sizeof(vita_palette_rgba));
+
+  glBindTexture(GL_TEXTURE_2D, vita_frame_texture);
+  texture = vglGetGxmTexture(GL_TEXTURE_2D);
+  if (texture)
+    sceGxmTextureSetPalette(texture, vita_palette_gpu);
+
+  vita_palette_dirty = 0;
+}
+
+void Vita_VideoPresent(const void *indexed_pixels, int pitch, int width, int height)
+{
   float scale;
   float dst_width;
   float dst_height;
@@ -211,18 +245,24 @@ void Vita_VideoPresent(const void *rgba_pixels, int pitch, int width, int height
     1.0f, 1.0f,
   };
 
-  if (!vita_video_initialized || !rgba_pixels || width <= 0 || height <= 0)
+  if (!vita_video_initialized || !indexed_pixels || width <= 0 || height <= 0)
     return;
 
   if (width != vita_texture_width || height != vita_texture_height)
     if (!Vita_VideoResize(width, height))
       return;
 
-  upload_pixels = Vita_ContiguousPixels(rgba_pixels, pitch, width, height);
-  if (!upload_pixels)
-    return;
+  Vita_ApplyPendingPalette();
 
   glBindTexture(GL_TEXTURE_2D, vita_frame_texture);
+
+  /*
+   * SDL may pad an 8-bit surface row. vitaGL honors GL_UNPACK_ROW_LENGTH,
+   * allowing us to upload straight from Doom's framebuffer with no staging
+   * copy or 8->32-bit conversion.
+   */
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+  glPixelStorei(GL_UNPACK_ROW_LENGTH, pitch);
   glTexSubImage2D(
     GL_TEXTURE_2D,
     0,
@@ -230,10 +270,11 @@ void Vita_VideoPresent(const void *rgba_pixels, int pitch, int width, int height
     0,
     width,
     height,
-    GL_RGBA,
+    GL_RED,
     GL_UNSIGNED_BYTE,
-    upload_pixels
+    indexed_pixels
   );
+  glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
 
   Vita_Set2DState();
   glClear(GL_COLOR_BUFFER_BIT);
@@ -269,6 +310,7 @@ void Vita_VideoPresent(const void *rgba_pixels, int pitch, int width, int height
   glDisableClientState(GL_VERTEX_ARRAY);
 
   vglSwapBuffers(GL_FALSE);
+  vita_frame_presented = 1;
 
   if (!vita_launcher_framebuffer_released)
   {
