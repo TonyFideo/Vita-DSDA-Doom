@@ -566,6 +566,7 @@ static void I_UploadNewPalette(int pal, int force)
       playpal_data->colours[i].r = gtable[palette[0]];
       playpal_data->colours[i].g = gtable[palette[1]];
       playpal_data->colours[i].b = gtable[palette[2]];
+      playpal_data->colours[i].a = SDL_ALPHA_OPAQUE;
       palette += 3;
     }
 
