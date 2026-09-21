@@ -38,7 +38,9 @@
 #include "config.h"
 #endif
 
+#ifdef DSDA_ENABLE_OPENGL_RENDERER
 #include <SDL_opengl.h>
+#endif
 
 #include "doomtype.h"
 #include "v_video.h"
