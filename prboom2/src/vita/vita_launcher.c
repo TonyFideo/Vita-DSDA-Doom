@@ -10,6 +10,7 @@
 #include "vita/vita_system.h"
 #include "vita/vita_video.h"
 
+#include "dsda/args.h"
 #include "textscreen/txt_main.h"
 #include "textscreen/fonts/normal.h"
 
@@ -255,25 +256,65 @@ static void Vita_LauncherIWADLabel(int index, char *label, size_t label_size)
   }
 }
 
+static void Vita_LauncherPWADLabel(int selector_index, char *label, size_t label_size)
+{
+  const char *path;
+  const char *name;
+  char partition[5] = "----";
+  const int pwad_index = selector_index - 1;
+
+  if (selector_index <= 0)
+  {
+    snprintf(label, label_size, "NINGUNO");
+    return;
+  }
+
+  path = Vita_PWADPathAt(pwad_index);
+  name = Vita_PWADNameAt(pwad_index);
+
+  if (!path || !name)
+  {
+    snprintf(label, label_size, "NINGUNO");
+    return;
+  }
+
+  if (strlen(path) >= 4)
+  {
+    memcpy(partition, path, 4);
+    partition[4] = '\0';
+  }
+
+  snprintf(label, label_size, "%s %s", partition, name);
+  Vita_LauncherUppercase(label);
+
+  if (strlen(label) > 46)
+  {
+    label[43] = '.';
+    label[44] = '.';
+    label[45] = '.';
+    label[46] = '\0';
+  }
+}
+
 static void Vita_LauncherDrawRow(
   int row,
   int selected,
   const char *name,
   const char *value)
 {
-  const float y = 166.0f + row * 70.0f;
+  const float y = 146.0f + row * 58.0f;
 
   if (selected)
   {
     Vita_LauncherDrawRect(
-      80.0f, y - 13.0f, 800.0f, 55.0f,
+      80.0f, y - 11.0f, 800.0f, 48.0f,
       0.10f, 0.36f, 0.55f, 0.90f
     );
   }
   else
   {
     Vita_LauncherDrawRect(
-      80.0f, y - 13.0f, 800.0f, 55.0f,
+      80.0f, y - 11.0f, 800.0f, 48.0f,
       0.08f, 0.08f, 0.10f, 0.82f
     );
   }
@@ -307,15 +348,18 @@ static void Vita_LauncherDraw(
   int selected_row,
   int resolution_index,
   int iwad_index,
+  int pwad_selector_index,
   const char *status)
 {
   char iwad_label[64];
+  char pwad_label[64];
   const char *renderer_name =
     vita_launcher_renderer == VITA_LAUNCHER_RENDERER_SOFTWARE
       ? "SOFTWARE"
       : "VITAGL";
 
   Vita_LauncherIWADLabel(iwad_index, iwad_label, sizeof(iwad_label));
+  Vita_LauncherPWADLabel(pwad_selector_index, pwad_label, sizeof(pwad_label));
 
   Vita_LauncherSet2D();
 
@@ -356,14 +400,21 @@ static void Vita_LauncherDraw(
   Vita_LauncherDrawRow(
     3,
     selected_row == 3,
+    "PWAD",
+    pwad_label
+  );
+
+  Vita_LauncherDrawRow(
+    4,
+    selected_row == 4,
     "INICIAR JUEGO",
     NULL
   );
 
-  if (selected_row == 3)
+  if (selected_row == 4)
   {
     Vita_LauncherDrawText(
-      680.0f, 376.0f, 1.10f, "[ X ]",
+      680.0f, 378.0f, 1.10f, "[ X ]",
       0.70f, 0.90f, 1.0f, 1.0f
     );
   }
@@ -371,7 +422,7 @@ static void Vita_LauncherDraw(
   if (vita_launcher_renderer == VITA_LAUNCHER_RENDERER_VITAGL)
   {
     Vita_LauncherDrawText(
-      82.0f, 460.0f, 0.78f,
+      82.0f, 452.0f, 0.72f,
       "VITAGL: RENDERER PREPARADO PARA DESARROLLO FUTURO",
       1.0f, 0.72f, 0.30f, 1.0f
     );
@@ -380,14 +431,14 @@ static void Vita_LauncherDraw(
   if (status && *status)
   {
     Vita_LauncherDrawText(
-      82.0f, 490.0f, 0.78f, status,
+      82.0f, 482.0f, 0.72f, status,
       1.0f, 0.45f, 0.40f, 1.0f
     );
   }
   else
   {
     Vita_LauncherDrawText(
-      82.0f, 490.0f, 0.72f,
+      82.0f, 482.0f, 0.68f,
       "ARRIBA/ABAJO: OPCION   IZQ/DER: CAMBIAR   X: SELECCIONAR",
       0.72f, 0.72f, 0.76f, 1.0f
     );
@@ -420,11 +471,15 @@ int Vita_LauncherRun(void)
   int resolution_index = resolution_count - 1;
   int iwad_count;
   int iwad_index;
+  int pwad_count;
+  int pwad_selector_index = 0;
   char status[96] = {0};
 
   Vita_RefreshIWADs();
+  Vita_RefreshPWADs();
   iwad_count = Vita_IWADCount();
   iwad_index = Vita_SelectedIWADIndex();
+  pwad_count = Vita_PWADCount();
 
   if (!Vita_VideoInit())
   {
@@ -440,7 +495,11 @@ int Vita_LauncherRun(void)
 
   sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG_WIDE);
 
-  Vita_Log("[VITA] launcher opened: %d IWAD(s) available\n", iwad_count);
+  Vita_Log(
+    "[VITA] launcher opened: %d IWAD(s), %d PWAD(s) available\n",
+    iwad_count,
+    pwad_count
+  );
 
   for (;;)
   {
@@ -456,13 +515,13 @@ int Vita_LauncherRun(void)
 
     if (pressed & SCE_CTRL_UP)
     {
-      selected_row = Vita_LauncherWrap(selected_row - 1, 4);
+      selected_row = Vita_LauncherWrap(selected_row - 1, 5);
       status[0] = '\0';
     }
 
     if (pressed & SCE_CTRL_DOWN)
     {
-      selected_row = Vita_LauncherWrap(selected_row + 1, 4);
+      selected_row = Vita_LauncherWrap(selected_row + 1, 5);
       status[0] = '\0';
     }
 
@@ -496,6 +555,14 @@ int Vita_LauncherRun(void)
           }
           break;
 
+        case 3:
+          pwad_selector_index = Vita_LauncherWrap(
+            pwad_selector_index + direction,
+            pwad_count + 1
+          );
+          Vita_SelectPWAD(pwad_selector_index - 1);
+          break;
+
         default:
           break;
       }
@@ -503,7 +570,7 @@ int Vita_LauncherRun(void)
 
     if (pressed & SCE_CTRL_CROSS)
     {
-      if (selected_row == 3)
+      if (selected_row == 4)
       {
         if (iwad_count <= 0)
         {
@@ -526,17 +593,30 @@ int Vita_LauncherRun(void)
           const vita_resolution_option_t *resolution =
             &vita_resolution_options[resolution_index];
 
+          const int pwad_index = pwad_selector_index - 1;
+          const char *pwad_path = NULL;
+
           Vita_SelectIWAD(iwad_index);
+          Vita_SelectPWAD(pwad_index);
+
+          if (pwad_index >= 0)
+          {
+            pwad_path = Vita_PWADPathAt(pwad_index);
+            if (pwad_path)
+              dsda_AppendStringArg(dsda_arg_file, pwad_path);
+          }
+
           Vita_VideoSetInternalResolution(
             resolution->width,
             resolution->height
           );
 
           Vita_Log(
-            "[VITA] launcher start: renderer=software resolution=%dx%d IWAD=%s\n",
+            "[VITA] launcher start: renderer=software resolution=%dx%d IWAD=%s PWAD=%s\n",
             resolution->width,
             resolution->height,
-            Vita_IWADPathAt(iwad_index)
+            Vita_IWADPathAt(iwad_index),
+            pwad_path ? pwad_path : "none"
           );
 
           Vita_LauncherDestroyFont();
@@ -556,6 +636,7 @@ int Vita_LauncherRun(void)
       selected_row,
       resolution_index,
       iwad_index,
+      pwad_selector_index,
       status
     );
   }
