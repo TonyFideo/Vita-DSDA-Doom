@@ -61,8 +61,6 @@ set(COMMON_SRC
     dsda/gameinfo.h
     dsda/ghost.c
     dsda/ghost.h
-    dsda/gl/render_scale.c
-    dsda/gl/render_scale.h
     dsda/global.c
     dsda/global.h
     dsda/hud_components.h
@@ -501,27 +499,39 @@ set(DSDA_SOURCES
 )
 
 function(AddGameExecutable TARGET SOURCES)
-    set(SOURCES
-        ${SOURCES}
-        gl_clipper.c
-        gl_drawinfo.c
-        gl_fbo.c
-        gl_intern.h
-        gl_light.c
-        gl_main.c
-        gl_map.c
-        gl_missingtexture.c
-        gl_opengl.c
-        gl_opengl.h
-        gl_preprocess.c
-        gl_progress.c
-        gl_shader.c
-        gl_sky.c
-        gl_struct.h
-        gl_texture.c
-        gl_vertex.c
-        gl_wipe.c
-    )
+    if(DSDA_ENABLE_OPENGL_RENDERER)
+        list(APPEND SOURCES
+            dsda/gl/render_scale.c
+            dsda/gl/render_scale.h
+            gl_clipper.c
+            gl_drawinfo.c
+            gl_fbo.c
+            gl_intern.h
+            gl_light.c
+            gl_main.c
+            gl_map.c
+            gl_missingtexture.c
+            gl_opengl.c
+            gl_opengl.h
+            gl_preprocess.c
+            gl_progress.c
+            gl_shader.c
+            gl_sky.c
+            gl_struct.h
+            gl_texture.c
+            gl_vertex.c
+            gl_wipe.c
+        )
+    endif()
+
+    if(VITA)
+        list(APPEND SOURCES
+            vita/vita_system.c
+            vita/vita_system.h
+            vita/vita_video.c
+            vita/vita_video.h
+        )
+    endif()
 
     if(WIN32)
         set(SOURCES
@@ -559,6 +569,26 @@ function(AddGameExecutable TARGET SOURCES)
         dsda::dependencies
     )
 
+    if(VITA)
+        target_compile_definitions(${TARGET}
+            PRIVATE
+            VITA_DISPLAY_WIDTH=${VITA_DISPLAY_WIDTH}
+            VITA_DISPLAY_HEIGHT=${VITA_DISPLAY_HEIGHT}
+            VITA_SOFTWARE_WIDTH=${VITA_SOFTWARE_WIDTH}
+            VITA_SOFTWARE_HEIGHT=${VITA_SOFTWARE_HEIGHT}
+        )
+
+        target_compile_options(${TARGET}
+            PRIVATE
+            -O3
+            -mtune=cortex-a9
+            -mfpu=neon
+            -fsigned-char
+        )
+
+        target_link_options(${TARGET} PRIVATE -Wl,-q)
+    endif()
+
     set_target_properties(${TARGET} PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${DSDA_OUTPUT_PATH}
         C_STANDARD 99
@@ -570,6 +600,15 @@ function(AddGameExecutable TARGET SOURCES)
         COMMAND ${CMAKE_COMMAND} -E echo "Copying ${WAD_DATA_PATH} to $<TARGET_FILE_DIR:dsda-doom>"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different ${WAD_DATA_PATH} $<TARGET_FILE_DIR:dsda-doom>
     )
+
+    if(VITA)
+        vita_create_self(eboot.bin ${TARGET})
+        vita_create_vpk(vita-dsda-doom.vpk ${VITA_TITLEID} eboot.bin
+            VERSION ${VITA_VERSION}
+            NAME ${VITA_APP_NAME}
+            FILE ${WAD_DATA_PATH} dsda-doom.wad
+        )
+    endif()
 
     if(MSVC)
         set_target_properties(${TARGET} PROPERTIES
