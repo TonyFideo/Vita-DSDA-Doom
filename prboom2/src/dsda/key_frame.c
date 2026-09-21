@@ -186,10 +186,35 @@ void dsda_CopyKeyFrame(dsda_key_frame_t* dest, dsda_key_frame_t* source) {
 
 void dsda_InitAutoKeyFrames(void) {
   int i;
+  const int old_auto_kf_size = auto_kf_size;
 
   dsda_auto_key_frame_interval = dsda_IntConfig(dsda_config_auto_key_frame_interval);
   dsda_auto_key_frame_depth = dsda_IntConfig(dsda_config_auto_key_frame_depth);
   dsda_auto_key_frame_timeout = dsda_IntConfig(dsda_config_auto_key_frame_timeout);
+
+  /*
+   * The ring owns every snapshot buffer stored in its entries. Free those
+   * buffers before replacing the descriptor array; freeing only the array
+   * leaks all retained save states across demo/playback reinitialization.
+   */
+  if (auto_key_frames != NULL) {
+    for (i = 0; i < old_auto_kf_size; ++i)
+      if (auto_key_frames[i].kf.buffer != NULL)
+        Z_Free(auto_key_frames[i].kf.buffer);
+
+    Z_Free(auto_key_frames);
+    auto_key_frames = NULL;
+  }
+
+  /*
+   * first_kf is an independent copy of a snapshot from the previous ring and
+   * its parent metadata points into that ring. It must not survive a ring
+   * reinitialization.
+   */
+  if (first_kf.buffer != NULL) {
+    Z_Free(first_kf.buffer);
+    memset(&first_kf, 0, sizeof(first_kf));
+  }
 
   auto_kf_size = autoKeyFrameDepth();
 
@@ -212,9 +237,6 @@ void dsda_InitAutoKeyFrames(void) {
 
   ++auto_kf_size; // chain includes a terminator
 
-  if (auto_key_frames != NULL)
-    Z_Free(auto_key_frames);
-
   auto_key_frames = Z_Calloc(auto_kf_size, sizeof(auto_kf_t));
 
   auto_key_frames[0].prev = &auto_key_frames[auto_kf_size - 1];
@@ -230,6 +252,18 @@ void dsda_InitAutoKeyFrames(void) {
 }
 
 void dsda_InitPlaybackKeyFrames() {
+  int i;
+  const int old_playback_kf_size = playback_kf_size;
+
+  if (playback_key_frames != NULL) {
+    for (i = 0; i < old_playback_kf_size; ++i)
+      if (playback_key_frames[i].buffer != NULL)
+        Z_Free(playback_key_frames[i].buffer);
+
+    Z_Free(playback_key_frames);
+    playback_key_frames = NULL;
+  }
+
   // Max of 60 keyframes are saved, and they need to have 1 minute in between each
   playback_kf_size = demo_tics_count * demo_playerscount / TICRATE / 60;
   if (playback_kf_size > 60)
@@ -245,9 +279,6 @@ void dsda_InitPlaybackKeyFrames() {
     playback_kf_size = VITA_PLAYBACK_KF_MAX;
   }
 #endif
-
-  if (playback_key_frames != NULL)
-    Z_Free(playback_key_frames);
 
   playback_key_frames = Z_Calloc(playback_kf_size, sizeof(dsda_key_frame_t));
 }
