@@ -7,17 +7,58 @@ endif()
 add_library(dsda_dependencies INTERFACE IMPORTED)
 add_library(dsda::dependencies ALIAS dsda_dependencies)
 
-# Make sure OpenGL.framework is found, XQuartz may show up first and only supports GL 1.4
-if(APPLE)
-  set(find_framework_backup ${CMAKE_FIND_FRAMEWORK})
-  set(CMAKE_FIND_FRAMEWORK ONLY)
+set(dsda_platform_libraries)
+
+if(DSDA_ENABLE_OPENGL_RENDERER)
+  # Make sure OpenGL.framework is found, XQuartz may show up first and only supports GL 1.4
+  if(APPLE)
+    set(find_framework_backup ${CMAKE_FIND_FRAMEWORK})
+    set(CMAKE_FIND_FRAMEWORK ONLY)
+  endif()
+
+  set(OpenGL_GL_PREFERENCE LEGACY)
+  find_package(OpenGL 2.0 REQUIRED)
+  list(APPEND dsda_platform_libraries OpenGL::GL OpenGL::GLU)
+
+  if(APPLE)
+    set(CMAKE_FIND_FRAMEWORK ${find_framework_backup})
+  endif()
 endif()
 
-set(OpenGL_GL_PREFERENCE LEGACY)
-find_package(OpenGL 2.0 REQUIRED)
+if(VITA AND DSDA_VITA_PRESENT_VITAGL)
+  find_path(VITAGL_INCLUDE_DIR
+    NAMES vitaGL.h
+    PATHS "$ENV{VITASDK}/arm-vita-eabi/include"
+    REQUIRED
+  )
 
-if(APPLE)
-  set(CMAKE_FIND_FRAMEWORK ${find_framework_backup})
+  find_library(VITAGL_LIBRARY NAMES vitaGL REQUIRED)
+  find_library(VITASHARK_LIBRARY NAMES vitashark REQUIRED)
+  find_library(MATHNEON_LIBRARY NAMES mathneon REQUIRED)
+  find_library(SHACCCG_EXT_LIBRARY NAMES SceShaccCgExt REQUIRED)
+  find_library(TAIHEN_STUB_LIBRARY NAMES taihen_stub REQUIRED)
+  find_library(SHACCCG_STUB_LIBRARY NAMES SceShaccCg_stub REQUIRED)
+  find_library(KERNEL_DMAC_STUB_LIBRARY NAMES SceKernelDmacMgr_stub REQUIRED)
+  find_library(GXM_STUB_LIBRARY NAMES SceGxm_stub REQUIRED)
+  find_library(DISPLAY_STUB_LIBRARY NAMES SceDisplay_stub REQUIRED)
+  find_library(APP_MGR_STUB_LIBRARY NAMES SceAppMgr_stub REQUIRED)
+  find_library(COMMON_DIALOG_STUB_LIBRARY NAMES SceCommonDialog_stub REQUIRED)
+
+  target_include_directories(dsda_dependencies INTERFACE "${VITAGL_INCLUDE_DIR}")
+
+  list(APPEND dsda_platform_libraries
+    "${VITAGL_LIBRARY}"
+    "${VITASHARK_LIBRARY}"
+    "${MATHNEON_LIBRARY}"
+    "${SHACCCG_EXT_LIBRARY}"
+    "${TAIHEN_STUB_LIBRARY}"
+    "${SHACCCG_STUB_LIBRARY}"
+    "${KERNEL_DMAC_STUB_LIBRARY}"
+    "${GXM_STUB_LIBRARY}"
+    "${DISPLAY_STUB_LIBRARY}"
+    "${APP_MGR_STUB_LIBRARY}"
+    "${COMMON_DIALOG_STUB_LIBRARY}"
+  )
 endif()
 
 find_package(SDL2 2.0.12 CONFIG REQUIRED)
@@ -121,8 +162,7 @@ endif()
 
 target_link_libraries(dsda_dependencies
   INTERFACE
-  OpenGL::GL
-  OpenGL::GLU
+  ${dsda_platform_libraries}
   SndFile::sndfile
   libzip::zip
   ZLIB::ZLIB
