@@ -75,6 +75,7 @@
 #include "dsda/map_format.h"
 #ifdef __vita__
 #include "vita/vita_launcher.h"
+#include "vita/vita_system.h"
 #endif
 #include "dsda/render_stats.h"
 #include "dsda/settings.h"
@@ -164,6 +165,10 @@ void gld_Init(int width, int height)
 {
   GLfloat params[4]={0.0f,0.0f,1.0f,0.0f};
 
+#ifdef __vita__
+  Vita_Log("[VITA][GL] gld_Init begin %dx%d\n", width, height);
+#endif
+
   lprintf(LO_DEBUG, "GL_VENDOR: %s\n",glGetString(GL_VENDOR));
   lprintf(LO_DEBUG, "GL_RENDERER: %s\n",glGetString(GL_RENDERER));
   lprintf(LO_DEBUG, "GL_VERSION: %s\n",glGetString(GL_VERSION));
@@ -197,6 +202,10 @@ void gld_Init(int width, int height)
   }
 
   gld_InitOpenGL();
+
+#ifdef __vita__
+  Vita_Log("[VITA][GL] capabilities initialized\n");
+#endif
 
   dsda_GLSetRenderViewport();
   dsda_GLSetRenderViewportScissor();
@@ -235,9 +244,17 @@ void gld_Init(int width, int height)
   glClear(GL_COLOR_BUFFER_BIT);
   glClearColor(0.0f, 0.5f, 0.5f, 1.0f);
 
+#ifdef __vita__
+  Vita_Log("[VITA][GL] first clear/swap completed\n");
+#endif
+
   gld_InitLightTable();
   gld_InitSky();
   glsl_Init();
+
+#ifdef __vita__
+  Vita_Log("[VITA][GL] legacy shader stage initialized\n");
+#endif
   gld_FlushTextures(); // TODO: should this be here?
   M_ChangeSkyMode();
 
@@ -247,11 +264,19 @@ void gld_Init(int width, int height)
 
   // Create FBO object and associated render targets
   gld_InitFBO();
+
+#ifdef __vita__
+  Vita_Log("[VITA][GL] FBO stage initialized enabled=%d\n", gl_ext_framebuffer_object);
+#endif
   I_AtExit(gld_FreeScreenSizeFBO, true, "gld_FreeScreenSizeFBO", exit_priority_normal);
 
   gld_ResetLastTexture();
 
   I_AtExit(gld_CleanMemory, true, "gld_CleanMemory", exit_priority_normal); //e6y
+
+#ifdef __vita__
+  Vita_Log("[VITA][GL] gld_Init complete\n");
+#endif
 }
 
 void gld_InitCommandLine(void)
