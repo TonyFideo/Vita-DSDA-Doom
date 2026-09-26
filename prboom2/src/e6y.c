@@ -297,10 +297,17 @@ void M_ChangeSkyMode(void)
 
   gl_skymode = dsda_IntConfig(dsda_config_gl_skymode);
 
+#ifdef __vita__
+  /* Standard GL sky strips rely on glTexGen*, which VitaGL does not expose.
+   * The dome path carries explicit UVs and is therefore the correct legacy
+   * renderer path on Vita. Preserve the explicit "none" option. */
+  gl_drawskys = (gl_skymode == skytype_none) ? skytype_none : skytype_skydome;
+#else
   if (gl_skymode == skytype_auto)
     gl_drawskys = (dsda_FreeAim() ? skytype_skydome : skytype_standard);
   else
     gl_drawskys = gl_skymode;
+#endif
 }
 
 static const int upViewPitchLimit = -ANG90 + (1 << ANGLETOFINESHIFT);

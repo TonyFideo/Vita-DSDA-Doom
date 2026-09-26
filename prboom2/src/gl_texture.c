@@ -1219,6 +1219,16 @@ void gld_BindRaw(GLTexture *gltexture, unsigned int flags)
 // only that sky function bothers to call these, because lazy. ;)
 GLTexture *gld_RegisterSkyTexture(int texture_num, dboolean force)
 {
+#ifdef __vita__
+  /*
+   * Vita legacy mode does not use DSDA's indexed-lighting shader, so keeping
+   * the indexed sky texture set is both unnecessary and wrong: that set is
+   * sized from gld_numGLColormaps and selected by palette/gamma at draw time.
+   * Use one normal RGBA sky texture instead and apply palette flashes as a
+   * final screen overlay.
+   */
+  return gld_RegisterTexture(texture_num, true, force, false, true);
+#else
   GLTexture *basetexture;
   GLTexture *gltexture;
   int i;
@@ -1239,11 +1249,18 @@ GLTexture *gld_RegisterSkyTexture(int texture_num, dboolean force)
   }
 
   return basetexture;
+#endif
 }
 
 void gld_BindSkyTexture(GLTexture *gltexture)
 {
+#ifdef __vita__
+  /* The Vita sky object is already the real RGBA texture, not an indexed-set
+   * base handle that needs resolving through gld_GetGLSkyTexture(). */
+  gld_BindTexture(gltexture, 0, false);
+#else
   gld_BindTexture(gltexture, 0, true);
+#endif
 }
 
 GLTexture *gld_RegisterColormapTexture(int palette_index, int gamma_level, dboolean fullbright)
