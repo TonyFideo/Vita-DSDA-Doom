@@ -150,7 +150,7 @@ void gld_InitOpenGL(void)
   gl_ext_framebuffer_object = false;
   gl_ext_packed_depth_stencil = false;
   gl_ext_blend_color = false;
-  gl_ext_arb_vertex_buffer_object = false;
+  gl_ext_arb_vertex_buffer_object = dsda_IntConfig(dsda_config_gl_usevbo) != 0;
   gl_arb_pixel_buffer_object = false;
   gl_arb_shader_objects = true;
   gl_use_stencil = true;

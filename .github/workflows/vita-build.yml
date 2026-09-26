@@ -84,7 +84,9 @@ jobs:
           cd /tmp/vitaGL
           git checkout cd3791e29ff7f1c0ab349f12c7231f4871ce6a75
           make \
+            DISABLE_FFP_MULTITEXTURE=1 \
             ENABLE_LEGACY_PIPELINE=1 \
+            NO_DEBUG=1 \
             NO_SPLASHSCREEN=1 \
             -j"$(nproc)"
           make install

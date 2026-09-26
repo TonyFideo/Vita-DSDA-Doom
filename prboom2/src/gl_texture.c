@@ -779,6 +779,18 @@ GLTexture *gld_RegisterTexture(int texture_num, dboolean mipmap, dboolean force,
 {
   GLTexture *gltexture;
 
+#ifdef __vita__
+  /*
+   * The first VitaGL renderer pass intentionally runs without DSDA's indexed
+   * fragment shaders. Indexed textures are GL_RG where R stores the palette
+   * index and G stores coverage; fixed-function sampling interprets that as a
+   * literal red/green color with an implicit opaque alpha. That is exactly the
+   * green world + black sprite-hole failure seen on hardware. Keep Vita legacy
+   * textures in the normal RGBA path until the indexed shaders are ported.
+   */
+  indexed = false;
+#endif
+
   //e6y: textures with zero index should be loaded sometimes
   if (texture_num == NO_TEXTURE && !force)
     return NULL;
@@ -1000,6 +1012,10 @@ GLTexture *gld_RegisterPatch(int lump, int cm, dboolean is_sprite, dboolean inde
   const rpatch_t *patch;
   GLTexture *gltexture;
 
+#ifdef __vita__
+  indexed = false;
+#endif
+
   gltexture=gld_AddNewGLPatchTexture(lump, indexed);
   if (!gltexture)
     return NULL;
@@ -1098,6 +1114,10 @@ void gld_BindPatch(GLTexture *gltexture, int cm)
 GLTexture *gld_RegisterRaw(int lump, int width, int height, dboolean mipmap, dboolean indexed)
 {
   GLTexture *gltexture;
+
+#ifdef __vita__
+  indexed = false;
+#endif
 
   gltexture=gld_AddNewGLPatchTexture(lump, indexed);
   if (!gltexture)
@@ -1318,6 +1338,11 @@ void gld_BindColormapTexture(GLTexture *gltexture, int palette_index, int gamma_
 
 void gld_InitColormapTextures(dboolean fullbright)
 {
+#ifdef __vita__
+  /* Indexed lighting shaders are disabled in the Vita legacy path. */
+  (void)fullbright;
+  return;
+#else
   GLTexture *gltexture;
 
   // figure out how many palette variants are in the
@@ -1336,8 +1361,10 @@ void gld_InitColormapTextures(dboolean fullbright)
   gltexture = gld_RegisterColormapTexture(gld_paletteIndex, usegamma, fullbright);
   if (gltexture)
     gld_BindColormapTexture(gltexture, gld_paletteIndex, usegamma, fullbright);
+#endif
 }
 
+#ifndef __vita__
 // Darkness values for 1 to 5 iterations of fuzz darkening, derived from
 // dcolors.c by lovely847
 #define FUZZ1 0.188235294117647058824
@@ -1356,22 +1383,16 @@ static const float fuzz[50] =
   FUZZ2, FUZZ1, FUZZ1, FUZZ2, FUZZ3, FUZZ1, FUZZ1, FUZZ2, FUZZ3, FUZZ4,
   FUZZ5, FUZZ1, FUZZ1, FUZZ1, FUZZ1, FUZZ2, FUZZ1, FUZZ1, FUZZ2, FUZZ1
 };
-
-#ifdef __vita__
-static const unsigned char fuzz_vita[50] =
-{
-  48, 87, 48, 87, 48, 48, 87, 48, 48, 87,
-  48, 48, 48, 87, 48, 48, 48, 87, 118, 144,
-  165, 48, 87, 118, 48, 48, 48, 48, 87, 48,
-  87, 48, 48, 87, 118, 48, 48, 87, 118, 144,
-  165, 48, 48, 48, 48, 87, 48, 48, 87, 48
-};
 #endif
 
 static GLuint fuzz_texid = 0;
 
 void gld_InitFuzzTexture(void)
 {
+#ifdef __vita__
+  /* The legacy Vita fuzz fallback uses fixed-function color/blending only. */
+  return;
+#else
   if (fuzz_texid == 0)
   {
     GLEXT_glActiveTextureARB(GL_TEXTURE1_ARB);
@@ -1379,16 +1400,10 @@ void gld_InitFuzzTexture(void)
     glGenTextures(1, &fuzz_texid);
     glBindTexture(GL_TEXTURE_2D, fuzz_texid);
 
-#ifndef __vita__
     glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, GL_FALSE);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED,
                  sizeof(fuzz) / sizeof(*fuzz), 1, 0, GL_RED,
                  GL_FLOAT, fuzz);
-#else
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED,
-                 sizeof(fuzz_vita) / sizeof(*fuzz_vita), 1, 0, GL_RED,
-                 GL_UNSIGNED_BYTE, fuzz_vita);
-#endif
 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -1399,6 +1414,7 @@ void gld_InitFuzzTexture(void)
 
     glsl_SetTextureDims(1, sizeof(fuzz) / sizeof(*fuzz), 1);
   }
+#endif
 }
 
 // e6y

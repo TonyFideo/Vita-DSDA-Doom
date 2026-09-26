@@ -205,6 +205,7 @@ void gld_Init(int width, int height)
 
 #ifdef __vita__
   Vita_Log("[VITA][GL] capabilities initialized\n");
+  Vita_Log("[VITA][GL] legacy VBO=%d\n", gl_ext_arb_vertex_buffer_object);
 #endif
 
   dsda_GLSetRenderViewport();
