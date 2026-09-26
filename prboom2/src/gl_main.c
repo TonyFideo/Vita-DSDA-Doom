@@ -73,6 +73,9 @@
 
 #include "dsda/configuration.h"
 #include "dsda/map_format.h"
+#ifdef __vita__
+#include "vita/vita_launcher.h"
+#endif
 #include "dsda/render_stats.h"
 #include "dsda/settings.h"
 #include "dsda/stretch.h"
@@ -123,6 +126,10 @@ int gl_render_multisampling;
 
 void gld_MultisamplingInit(void)
 {
+#ifdef __vita__
+  gl_render_multisampling = 0;
+  return;
+#else
   gl_render_multisampling = dsda_IntConfig(dsda_config_gl_render_multisampling);
   gl_render_multisampling -= (gl_render_multisampling % 2);
 
@@ -138,6 +145,7 @@ void gld_MultisamplingInit(void)
     SDL_GL_SetAttribute( SDL_GL_MULTISAMPLESAMPLES, 0 );
     SDL_GL_SetAttribute( SDL_GL_MULTISAMPLEBUFFERS, 0 );
   }
+#endif
 }
 
 void gld_MultisamplingSet(void)
@@ -197,7 +205,9 @@ void gld_Init(int width, int height)
   glClearDepth(1.0f);
 
   glEnable(GL_BLEND);
+#ifndef __vita__
   glEnable(GL_DEPTH_CLAMP_NV);
+#endif
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
   glHint(GL_PERSPECTIVE_CORRECTION_HINT, GL_NICEST); // proff_dis
@@ -209,10 +219,14 @@ void gld_Init(int width, int height)
   glDisable(GL_CULL_FACE);
   glTexEnvf(GL_TEXTURE_ENV,GL_TEXTURE_ENV_MODE,GL_MODULATE);
 
+#ifndef __vita__
   glTexGenfv(GL_Q,GL_EYE_PLANE,params);
   glTexGenf(GL_S,GL_TEXTURE_GEN_MODE,GL_EYE_LINEAR);
   glTexGenf(GL_T,GL_TEXTURE_GEN_MODE,GL_EYE_LINEAR);
   glTexGenf(GL_Q,GL_TEXTURE_GEN_MODE,GL_EYE_LINEAR);
+#else
+  (void)params;
+#endif
 
   //e6y
   glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
@@ -466,22 +480,36 @@ void gld_DrawTriangleStrip(GLWall *wall, gl_strip_coords_t *c)
 
 void gld_BeginUIDraw(void)
 {
+#ifdef __vita__
+  glsl_PushNullShader();
+  gl_ui_lightmode_indexed = false;
+#else
   gld_InitColormapTextures(true);
   glsl_PushMainShader();
   gl_ui_lightmode_indexed = true;
+#endif
 }
 
 void gld_EndUIDraw(void)
 {
   gl_ui_lightmode_indexed = false;
+#ifdef __vita__
+  glsl_PopNullShader();
+#else
   glsl_PopMainShader();
+#endif
 }
 
 void gld_BeginAutomapDraw(void)
 {
+#ifdef __vita__
+  glsl_PushNullShader();
+  gl_automap_lightmode_indexed = false;
+#else
   gld_InitColormapTextures(true);
   glsl_PushNullShader();
   gl_automap_lightmode_indexed = true;
+#endif
 }
 
 void gld_EndAutomapDraw(void)
@@ -492,9 +520,14 @@ void gld_EndAutomapDraw(void)
 
 void gld_BeginMenuDraw(void)
 {
+#ifdef __vita__
+  glsl_PushNullShader();
+  gl_menu_lightmode_indexed = false;
+#else
   gld_InitColormapTextures(true);
   glsl_PushNullShader();
   gl_menu_lightmode_indexed = true;
+#endif
 }
 
 void gld_EndMenuDraw(void)
@@ -973,7 +1006,21 @@ void gld_Finish(void)
 {
   gld_Set2DMode();
   I_HandleCapture();
+#ifdef __vita__
+  {
+    static dboolean launcher_fb_released = false;
+
+    vglSwapBuffers(GL_FALSE);
+    if (!launcher_fb_released)
+    {
+      sceGxmDisplayQueueFinish();
+      Vita_LauncherReleaseFramebuffer();
+      launcher_fb_released = true;
+    }
+  }
+#else
   SDL_GL_SwapWindow(sdl_window);
+#endif
 }
 
 GLuint flats_vbo_id = 0; // ID of VBO
@@ -1086,7 +1133,9 @@ void gld_StartDrawScene(void)
 
 void gld_EndDrawScene(void)
 {
+#ifndef __vita__
   glDisable(GL_POLYGON_SMOOTH);
+#endif
 
   glViewport(0, 0, SCREENWIDTH, SCREENHEIGHT);
   gld_Set2DMode();

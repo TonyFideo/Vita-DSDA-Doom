@@ -90,8 +90,15 @@ static void gld_TurnOffSubsectorTriangulation(void)
 
 static dboolean gld_TriangulateSubsector(subsector_t *ssec)
 {
+#ifdef __vita__
+  /* Vita avoids the GLU tessellator. Build flat geometry from BSP subsectors,
+   * which are already convex, and group those loops back by sector. */
+  (void)ssec;
+  return true;
+#else
   return !(ssec->sector->flags & SECTOR_IS_CLOSED) ||
          triangulate_subsectors;
+#endif
 }
 
 static int gld_SubsectorLoopIndex(subsector_t *ssec)
@@ -358,6 +365,7 @@ static void gld_CarveFlats(int bspnode, int numdivlines, divline_t *divlines)
   Z_Free(childlist);
 }
 
+#ifndef __vita__
 static int currentsector; // the sector which is currently tesselated
 
 // ntessBegin
@@ -724,6 +732,7 @@ static void gld_PrecalculateSector(int num)
   Z_Free(v);
   Z_Free(lineadded);
 }
+#endif
 
 /********************************************
  * Name     : gld_GetSubSectorVertices      *
@@ -977,8 +986,10 @@ static void gld_PreprocessSectors(void)
     }
 
     // figgi -- adapted for glnodes
+#ifndef __vita__
     if (sectors[i].flags & SECTOR_IS_CLOSED)
       gld_PrecalculateSector(i);
+#endif
   }
   Z_Free(vertexcheck);
   Z_Free(vertexcheck2);
@@ -991,6 +1002,13 @@ static void gld_PreprocessSectors(void)
     else
       gld_GetSubSectorVertices();
   }
+#ifdef __vita__
+  else if (numsubsectors)
+  {
+    /* Trivial maps have one subsector and no BSP nodes. */
+    gld_FlatConvexCarver(0, 0, NULL);
+  }
+#endif
 
   gld_ProcessTexturedMap();
 

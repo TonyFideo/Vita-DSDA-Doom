@@ -9,7 +9,7 @@ add_library(dsda::dependencies ALIAS dsda_dependencies)
 
 set(dsda_platform_libraries)
 
-if(DSDA_ENABLE_OPENGL_RENDERER)
+if(DSDA_ENABLE_OPENGL_RENDERER AND NOT VITA)
   # Make sure OpenGL.framework is found, XQuartz may show up first and only supports GL 1.4
   if(APPLE)
     set(find_framework_backup ${CMAKE_FIND_FRAMEWORK})
@@ -25,7 +25,7 @@ if(DSDA_ENABLE_OPENGL_RENDERER)
   endif()
 endif()
 
-if(VITA AND DSDA_VITA_PRESENT_VITAGL)
+if(VITA AND (DSDA_VITA_PRESENT_VITAGL OR DSDA_ENABLE_OPENGL_RENDERER))
   find_path(VITAGL_INCLUDE_DIR
     NAMES vitaGL.h
     PATHS "$ENV{VITASDK}/arm-vita-eabi/include"

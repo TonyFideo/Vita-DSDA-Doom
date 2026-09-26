@@ -38,7 +38,11 @@
 
 #include <assert.h>
 #include <SDL.h>
+#ifdef __vita__
+#include "vita/vita_gl_compat.h"
+#else
 #include <SDL_opengl.h>
+#endif
 #include <math.h>
 #include <stdarg.h>
 #include "doomstat.h"
@@ -609,8 +613,16 @@ static const shader_info_t fuzz_info =
 
 void glsl_Init(void)
 {
+#ifdef __vita__
+  /* First VitaGL bring-up intentionally stays on the legacy fixed-function
+   * path. Custom indexed/fuzz shaders are enabled in the next renderer stage. */
+  sh_main = NULL;
+  sh_fuzz = NULL;
+  lprintf(LO_INFO, "[VITA] OpenGL legacy mode: DSDA custom shaders disabled\n");
+#else
   sh_main = glsl_ShaderLoad(&main_info, NULL);
   sh_fuzz = glsl_ShaderLoad(&fuzz_info, NULL);
+#endif
 }
 
 void glsl_PushNullShader(void)
@@ -639,6 +651,9 @@ void glsl_PopMainShader(void)
 
 void glsl_SetLightLevel(float lightlevel)
 {
+  if (!sh_main)
+    return;
+
   glsl_ShaderUniform(sh_main, MAIN_UNIF_LIGHTLEVEL, lightlevel);
 }
 

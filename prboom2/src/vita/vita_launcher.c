@@ -898,14 +898,6 @@ int Vita_LauncherRun(void)
             "NO HAY IWADS EN ux0/uma0/ur0:/data/DSDA-Doom/IWADs"
           );
         }
-        else if (vita_launcher_renderer == VITA_LAUNCHER_RENDERER_VITAGL)
-        {
-          snprintf(
-            status,
-            sizeof(status),
-            "EL RENDERER VITAGL TODAVIA NO ESTA IMPLEMENTADO"
-          );
-        }
         else
         {
           const vita_resolution_option_t *resolution =
@@ -954,15 +946,29 @@ int Vita_LauncherRun(void)
             );
           }
 
-          Vita_VideoSetInternalResolution(
-            resolution->width,
-            resolution->height
-          );
+          if (vita_launcher_renderer == VITA_LAUNCHER_RENDERER_SOFTWARE)
+          {
+            Vita_VideoSetInternalResolution(
+              resolution->width,
+              resolution->height
+            );
+          }
+          else
+          {
+            /* First OpenGL bring-up renders at the native Vita resolution.
+             * Render-scale/FBO support can be enabled after the base renderer
+             * is stable. */
+            Vita_VideoSetInternalResolution(
+              VITA_DISPLAY_WIDTH,
+              VITA_DISPLAY_HEIGHT
+            );
+          }
 
           Vita_Log(
-            "[VITA] launcher start: renderer=software resolution=%dx%d IWAD=%s PWAD=%s timedemo=%s%s%s\n",
-            resolution->width,
-            resolution->height,
+            "[VITA] launcher start: renderer=%s resolution=%dx%d IWAD=%s PWAD=%s timedemo=%s%s%s\n",
+            vita_launcher_renderer == VITA_LAUNCHER_RENDERER_VITAGL ? "opengl" : "software",
+            vita_launcher_renderer == VITA_LAUNCHER_RENDERER_VITAGL ? VITA_DISPLAY_WIDTH : resolution->width,
+            vita_launcher_renderer == VITA_LAUNCHER_RENDERER_VITAGL ? VITA_DISPLAY_HEIGHT : resolution->height,
             Vita_IWADPathAt(iwad_index),
             pwad_path ? pwad_path : "none",
             timedemo_enabled ? "on" : "off",

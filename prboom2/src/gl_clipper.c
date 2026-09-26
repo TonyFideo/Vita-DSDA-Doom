@@ -68,7 +68,11 @@
 **
 */
 
+#ifdef __vita__
+#include "vita/vita_gl_compat.h"
+#else
 #include <SDL_opengl.h>
+#endif
 #include <math.h>
 #include "v_video.h"
 #include "gl_intern.h"

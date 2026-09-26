@@ -39,6 +39,10 @@
 #endif
 
 #include <SDL.h>
+
+#ifdef __vita__
+#include "vita/vita_gl_compat.h"
+#else
 #include <SDL_opengl.h>
 
 #if SDL_VERSION_ATLEAST(1, 3, 0)
@@ -51,6 +55,7 @@
 #else
 #include <GL/gl.h>	/* Header File For The OpenGL Library */
 #include <GL/glu.h>	/* Header File For The GLU Library */
+#endif
 #endif
 #endif
 
@@ -76,6 +81,7 @@ extern dboolean gl_ext_arb_vertex_buffer_object;
 extern dboolean gl_arb_pixel_buffer_object;
 extern dboolean gl_arb_shader_objects;
 
+#ifndef __vita__
 extern PFNGLBINDFRAMEBUFFEREXTPROC         GLEXT_glBindFramebufferEXT;
 extern PFNGLGENFRAMEBUFFERSEXTPROC         GLEXT_glGenFramebuffersEXT;
 extern PFNGLGENRENDERBUFFERSEXTPROC        GLEXT_glGenRenderbuffersEXT;
@@ -134,6 +140,7 @@ extern PFNGLGETATTACHEDOBJECTSARBPROC       GLEXT_glGetAttachedObjectsARB;
 extern PFNGLGETUNIFORMLOCATIONARBPROC       GLEXT_glGetUniformLocationARB;
 extern PFNGLGETACTIVEUNIFORMARBPROC         GLEXT_glGetActiveUniformARB;
 extern PFNGLGETUNIFORMFVARBPROC             GLEXT_glGetUniformfvARB;
+#endif
 
 void gld_InitOpenGL(void);
 

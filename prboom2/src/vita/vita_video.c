@@ -120,15 +120,18 @@ static void Vita_BindPersistentPresenter(void)
   glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
 }
 
-int Vita_VideoInit(void)
+static int Vita_VideoInitCommon(int software_presenter)
 {
   GLboolean resolution_fallback;
+  const int legacy_pool_size = software_presenter ? 0 : (4 * 1024 * 1024);
 
   if (vita_video_initialized)
     return 1;
 
-  Vita_Log("[VITA] initializing VitaGL at %dx%d\n",
-           VITA_DISPLAY_WIDTH, VITA_DISPLAY_HEIGHT);
+  Vita_Log("[VITA] initializing VitaGL at %dx%d mode=%s legacy_pool=%d\n",
+           VITA_DISPLAY_WIDTH, VITA_DISPLAY_HEIGHT,
+           software_presenter ? "software-present" : "opengl",
+           legacy_pool_size);
 
   /*
    * Important: vitaGL's vglInitExtended() return value is NOT a generic
@@ -142,7 +145,7 @@ int Vita_VideoInit(void)
    * normal 960x544 startup immediately after vitaGL had initialized.
    */
   resolution_fallback = vglInitExtended(
-    0,
+    legacy_pool_size,
     VITA_DISPLAY_WIDTH,
     VITA_DISPLAY_HEIGHT,
     16 * 1024 * 1024,
@@ -179,6 +182,14 @@ int Vita_VideoInit(void)
   }
   vita_palette_generation = 1;
   vita_frame_presented = 0;
+
+  if (!software_presenter)
+  {
+    vita_video_initialized = 1;
+    Vita_Log("[VITA] VitaGL OpenGL context ready at %dx%d\n",
+             VITA_DISPLAY_WIDTH, VITA_DISPLAY_HEIGHT);
+    return 1;
+  }
 
   vita_present_vertices = (GLfloat *)vglMemalign(16, sizeof(GLfloat) * 8);
   vita_present_texcoords = (GLfloat *)vglMemalign(16, sizeof(GLfloat) * 8);
@@ -220,6 +231,16 @@ int Vita_VideoInit(void)
            VITA_DISPLAY_WIDTH, VITA_DISPLAY_HEIGHT);
 
   return Vita_VideoResize(vita_internal_width, vita_internal_height);
+}
+
+int Vita_VideoInit(void)
+{
+  return Vita_VideoInitCommon(1);
+}
+
+int Vita_VideoInitOpenGL(void)
+{
+  return Vita_VideoInitCommon(0);
 }
 
 void Vita_VideoSetVSync(int enabled)

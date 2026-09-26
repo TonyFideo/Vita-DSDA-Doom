@@ -65,6 +65,7 @@ dboolean gl_arb_shader_objects = false;
 int active_texture_enabled[32];
 int clieant_active_texture_enabled[32];
 
+#ifndef __vita__
 /* EXT_framebuffer_object */
 PFNGLBINDFRAMEBUFFEREXTPROC         GLEXT_glBindFramebufferEXT         = NULL;
 PFNGLGENFRAMEBUFFERSEXTPROC         GLEXT_glGenFramebuffersEXT         = NULL;
@@ -124,17 +125,62 @@ PFNGLGETATTACHEDOBJECTSARBPROC   GLEXT_glGetAttachedObjectsARB = NULL;
 PFNGLGETUNIFORMLOCATIONARBPROC   GLEXT_glGetUniformLocationARB = NULL;
 PFNGLGETACTIVEUNIFORMARBPROC     GLEXT_glGetActiveUniformARB = NULL;
 PFNGLGETUNIFORMFVARBPROC         GLEXT_glGetUniformfvARB = NULL;
+#endif
 
 int gl_major_version;
 int gl_minor_version;
 
 void gld_InitOpenGLVersion(void)
 {
+#ifdef __vita__
+  gl_major_version = 2;
+  gl_minor_version = 0;
+#else
   sscanf((const char*) glGetString(GL_VERSION), "%d.%d", &gl_major_version, &gl_minor_version);
+#endif
 }
 
 void gld_InitOpenGL(void)
 {
+#ifdef __vita__
+  /* VitaGL exposes the features DSDA needs through core entry points rather
+   * than the desktop ARB/EXT extension names used by the original renderer. */
+  gl_ext_texture_filter_anisotropic = false;
+  gl_arb_texture_compression = false;
+  gl_ext_framebuffer_object = false;
+  gl_ext_packed_depth_stencil = false;
+  gl_ext_blend_color = false;
+  gl_ext_arb_vertex_buffer_object = false;
+  gl_arb_pixel_buffer_object = false;
+  gl_arb_shader_objects = true;
+  gl_use_stencil = true;
+
+  gld_InitOpenGLVersion();
+
+  glGetIntegerv(GL_MAX_TEXTURE_SIZE, &gl_max_texture_size);
+  lprintf(LO_DEBUG, "VitaGL compatibility path active\n");
+  lprintf(LO_DEBUG, "GL_MAX_TEXTURE_SIZE=%i\n", gl_max_texture_size);
+
+  gld_EnableTexture2D(GL_TEXTURE0_ARB, true);
+  gld_EnableTexture2D(GL_TEXTURE0_ARB, false);
+  gld_EnableClientCoordArray(GL_TEXTURE0_ARB, true);
+  gld_EnableClientCoordArray(GL_TEXTURE0_ARB, false);
+
+  RGBAFormat.palette = 0;
+  RGBAFormat.BitsPerPixel = 32;
+  RGBAFormat.BytesPerPixel = 4;
+#if SDL_BYTEORDER == SDL_BIG_ENDIAN
+  RGBAFormat.Rmask = 0xFF000000; RGBAFormat.Rshift = 0; RGBAFormat.Rloss = 0;
+  RGBAFormat.Gmask = 0x00FF0000; RGBAFormat.Gshift = 8; RGBAFormat.Gloss = 0;
+  RGBAFormat.Bmask = 0x0000FF00; RGBAFormat.Bshift = 16; RGBAFormat.Bloss = 0;
+  RGBAFormat.Amask = 0x000000FF; RGBAFormat.Ashift = 24; RGBAFormat.Aloss = 0;
+#else
+  RGBAFormat.Rmask = 0x000000FF; RGBAFormat.Rshift = 24; RGBAFormat.Rloss = 0;
+  RGBAFormat.Gmask = 0x0000FF00; RGBAFormat.Gshift = 16; RGBAFormat.Gloss = 0;
+  RGBAFormat.Bmask = 0x00FF0000; RGBAFormat.Bshift = 8; RGBAFormat.Bloss = 0;
+  RGBAFormat.Amask = 0xFF000000; RGBAFormat.Ashift = 0; RGBAFormat.Aloss = 0;
+#endif
+#else
   GLenum texture;
   const char *extensions = (const char*)glGetString(GL_EXTENSIONS);
   dboolean gl_arb_multitexture = false;
@@ -367,6 +413,7 @@ void gld_InitOpenGL(void)
   RGBAFormat.Bmask = 0x00FF0000; RGBAFormat.Bshift = 8; RGBAFormat.Bloss = 0;
   RGBAFormat.Amask = 0xFF000000; RGBAFormat.Ashift = 0; RGBAFormat.Aloss = 0;
 #endif
+#endif
 }
 
 void gld_EnableTexture2D(GLenum texture, int enable)
@@ -453,6 +500,9 @@ void gld_EnableClientCoordArray(GLenum texture, int enable)
 
 void gld_EnableMultisample(int enable)
 {
+#ifdef __vita__
+  (void)enable;
+#else
   static int multisample_is_enabled = 0;
   if (enable)
   {
@@ -472,6 +522,7 @@ void gld_EnableMultisample(int enable)
       multisample_is_enabled = enable;
     }
   }
+#endif
 }
 
 void SetTextureMode(tex_mode_e type)

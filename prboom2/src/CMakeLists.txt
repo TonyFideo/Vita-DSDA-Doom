@@ -534,12 +534,15 @@ function(AddGameExecutable TARGET SOURCES)
         list(APPEND SOURCES
             vita/vita_system.c
             vita/vita_system.h
-            vita/vita_gl_stubs.c
             vita/vita_video.c
             vita/vita_video.h
             vita/vita_launcher.c
             vita/vita_launcher.h
         )
+
+        if(NOT DSDA_ENABLE_OPENGL_RENDERER)
+            list(APPEND SOURCES vita/vita_gl_stubs.c)
+        endif()
     endif()
 
     if(WIN32)

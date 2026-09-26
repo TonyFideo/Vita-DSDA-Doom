@@ -96,6 +96,7 @@
 #include "dsda/gl/render_scale.h"
 
 #ifdef __vita__
+#include "vita/vita_launcher.h"
 #include "vita/vita_system.h"
 #include "vita/vita_video.h"
 #endif
@@ -640,6 +641,12 @@ static int newpal = 0;
 void I_FinishUpdate (void)
 {
 #ifdef __vita__
+  if (V_IsOpenGLMode())
+  {
+    gld_Finish();
+    return;
+  }
+
   if (!screen)
     return;
 
@@ -1086,7 +1093,9 @@ static video_mode_t I_GetModeFromString(const char *modestr)
 
 static video_mode_t I_DesiredVideoMode(void) {
 #ifdef __vita__
-  return VID_MODESW;
+  return Vita_LauncherRenderer() == VITA_LAUNCHER_RENDERER_VITAGL
+    ? VID_MODEGL
+    : VID_MODESW;
 #else
   dsda_arg_t *arg;
   video_mode_t mode;
@@ -1123,12 +1132,20 @@ void I_InitScreenResolution(void)
   (void)init;
 
   desired_fullscreen = 1;
-  w = Vita_VideoInternalWidth();
-  h = Vita_VideoInternalHeight();
+  mode = I_DesiredVideoMode();
+  if (mode == VID_MODEGL)
+  {
+    w = VITA_DISPLAY_WIDTH;
+    h = VITA_DISPLAY_HEIGHT;
+  }
+  else
+  {
+    w = Vita_VideoInternalWidth();
+    h = Vita_VideoInternalHeight();
+  }
   desired_screenwidth = w;
   desired_screenheight = h;
 
-  mode = VID_MODESW;
   V_InitMode(mode);
 
   I_CalculateRes(w, h);
@@ -1146,10 +1163,11 @@ void I_InitScreenResolution(void)
 
   I_InitBuffersRes();
 
-  Vita_Log("[VITA] renderer: SOFTWARE %dx%d pitch=%d\n",
+  Vita_Log("[VITA] renderer: %s %dx%d pitch=%d\n",
+           mode == VID_MODEGL ? "OPENGL" : "SOFTWARE",
            SCREENWIDTH, SCREENHEIGHT, SCREENPITCH);
-  lprintf(LO_DEBUG, "I_InitScreenResolution: Vita software resolution %dx%d\n",
-          SCREENWIDTH, SCREENHEIGHT);
+  lprintf(LO_DEBUG, "I_InitScreenResolution: Vita %s resolution %dx%d\n",
+          mode == VID_MODEGL ? "OpenGL" : "software", SCREENWIDTH, SCREENHEIGHT);
   return;
 #else
 
@@ -1335,6 +1353,55 @@ void I_UpdateVideoMode(void)
   {
     SDL_FreeSurface(buffer);
     buffer = NULL;
+  }
+
+  if (V_IsOpenGLMode())
+  {
+    if (!Vita_VideoInitOpenGL())
+      I_Error("VitaGL OpenGL initialization failed");
+
+    Vita_VideoSetVSync(vita_vsync);
+
+    ACTUALHEIGHT = SCREENHEIGHT;
+    desired_fullscreen = 1;
+    exclusive_fullscreen = 0;
+
+    renderer_rect.x = 0;
+    renderer_rect.y = 0;
+    renderer_rect.w = VITA_DISPLAY_WIDTH;
+    renderer_rect.h = VITA_DISPLAY_HEIGHT;
+
+    window_rect = renderer_rect;
+    viewport_rect = renderer_rect;
+    window_focused = true;
+
+    R_ExecuteSetViewSize();
+
+    V_SetPalette(0);
+    I_UploadNewPalette(0, true);
+
+    ST_SetResolution();
+    AM_SetResolution();
+
+    gld_Init(SCREENWIDTH, SCREENHEIGHT);
+    M_ChangeFOV();
+    deh_changeCompTranslucency();
+    dsda_GLSetRenderViewportParams();
+    dsda_GLSetRenderViewport();
+
+    src_rect.x = 0;
+    src_rect.y = 0;
+    src_rect.w = SCREENWIDTH;
+    src_rect.h = SCREENHEIGHT;
+
+    Vita_Log(
+      "[VITA] video mode ready: opengl=%dx%d display=%dx%d legacy=1\n",
+      SCREENWIDTH,
+      SCREENHEIGHT,
+      VITA_DISPLAY_WIDTH,
+      VITA_DISPLAY_HEIGHT
+    );
+    return;
   }
 
   if (!Vita_VideoInit())

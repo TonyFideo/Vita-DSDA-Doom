@@ -39,7 +39,11 @@
 #endif
 
 #ifdef DSDA_ENABLE_OPENGL_RENDERER
+#ifdef __vita__
+#include "vita/vita_gl_compat.h"
+#else
 #include <SDL_opengl.h>
+#endif
 #endif
 
 #include "doomtype.h"

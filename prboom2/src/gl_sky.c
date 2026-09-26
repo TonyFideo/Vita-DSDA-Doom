@@ -276,9 +276,11 @@ void gld_DrawStripsSky(void)
 
   if (gl_drawskys == skytype_standard)
   {
+#ifndef __vita__
     glEnable(GL_TEXTURE_GEN_S);
     glEnable(GL_TEXTURE_GEN_T);
     glEnable(GL_TEXTURE_GEN_Q);
+#endif
 
     glColor4fv(gl_whitecolor);
 
@@ -325,9 +327,11 @@ void gld_DrawStripsSky(void)
 
   if (gl_drawskys == skytype_standard)
   {
+#ifndef __vita__
     glDisable(GL_TEXTURE_GEN_Q);
     glDisable(GL_TEXTURE_GEN_T);
     glDisable(GL_TEXTURE_GEN_S);
+#endif
 
     SetFrameTextureMode();
   }
@@ -461,6 +465,14 @@ void gld_GetSkyCapColors(void)
 
   gld_BindSkyTexture(SkyBox.wall.gltexture);
 
+#ifdef __vita__
+  /* VitaGL does not expose desktop texture readback. During the legacy
+   * bring-up keep deterministic cap colors; the textured dome/strip remains
+   * the visible sky surface. */
+  width = height = 0;
+  ceiling_rgb->r = ceiling_rgb->g = ceiling_rgb->b = 0;
+  floor_rgb->r = floor_rgb->g = floor_rgb->b = 0;
+#else
   glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &width);
   glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &height);
 
@@ -478,6 +490,7 @@ void gld_GetSkyCapColors(void)
   {
     *floor_rgb = *ceiling_rgb;
   }
+#endif
 
   colormap = fullcolormap + INVERSECOLORMAP * 256 * sizeof(lighttable_t);
 

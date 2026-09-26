@@ -95,7 +95,7 @@ jobs:
           cmake -S prboom2 -B build-vita -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" \
             -DCMAKE_BUILD_TYPE=Release \
-            -DDSDA_ENABLE_OPENGL_RENDERER=OFF \
+            -DDSDA_ENABLE_OPENGL_RENDERER=ON \
             -DDSDA_VITA_PRESENT_VITAGL=ON \
             -DWITH_IMAGE=OFF \
             -DWITH_MAD=OFF \

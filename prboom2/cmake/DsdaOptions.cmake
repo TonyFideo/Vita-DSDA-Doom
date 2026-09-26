@@ -25,9 +25,9 @@ option(DSDA_ENABLE_OPENGL_RENDERER "Build the native DSDA OpenGL renderer" ON)
 option(DSDA_VITA_PRESENT_VITAGL "Use VitaGL to present the software framebuffer on Vita" OFF)
 
 if(VITA)
-  # Vita starts with the software renderer. VitaGL is only the presentation
-  # backend in this phase; the DSDA gld_* renderer stays disabled.
-  set(DSDA_ENABLE_OPENGL_RENDERER OFF CACHE BOOL "Build the native DSDA OpenGL renderer" FORCE)
+  # Vita builds both renderer paths into the same executable. The launcher
+  # selects between the software renderer and DSDA's native gld_* renderer at
+  # runtime; both are presented through VitaGL/GXM.
   set(DSDA_VITA_PRESENT_VITAGL ON CACHE BOOL "Use VitaGL to present the software framebuffer on Vita" FORCE)
 
   set(VITA_TITLEID "DSDA02689" CACHE STRING "PS Vita title id")

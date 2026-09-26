@@ -2,6 +2,7 @@
 #define DSDA_VITA_VIDEO_H
 
 int Vita_VideoInit(void);
+int Vita_VideoInitOpenGL(void);
 void Vita_VideoShutdown(void);
 void Vita_VideoSetVSync(int enabled);
 

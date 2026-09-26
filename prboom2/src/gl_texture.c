@@ -799,6 +799,15 @@ GLTexture *gld_RegisterTexture(int texture_num, dboolean mipmap, dboolean force,
 
 unsigned char* gld_GetTextureBuffer(GLuint texid, int miplevel, int *width, int *height)
 {
+#ifdef __vita__
+  (void)texid;
+  (void)miplevel;
+  if (width)
+    *width = 0;
+  if (height)
+    *height = 0;
+  return NULL;
+#else
   int w, h;
   static unsigned char *buf = NULL;
   static int buf_size = 512 * 256 * 4;
@@ -829,6 +838,7 @@ unsigned char* gld_GetTextureBuffer(GLuint texid, int miplevel, int *width, int 
     *height = h;
 
   return buf;
+#endif
 }
 
 void gld_SetTexFilters(GLTexture *gltexture)
@@ -896,7 +906,9 @@ int gld_BuildTexture(GLTexture *gltexture, void *data, dboolean readonly, int wi
   tex_width  = gld_GetTexDimension(width);
   tex_height = gld_GetTexDimension(height);
 
+#ifndef __vita__
   glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, GL_FALSE);
+#endif
 
   glTexImage2D( GL_TEXTURE_2D, 0, tex_format,
     tex_width, tex_height,
@@ -1345,6 +1357,17 @@ static const float fuzz[50] =
   FUZZ5, FUZZ1, FUZZ1, FUZZ1, FUZZ1, FUZZ2, FUZZ1, FUZZ1, FUZZ2, FUZZ1
 };
 
+#ifdef __vita__
+static const unsigned char fuzz_vita[50] =
+{
+  48, 87, 48, 87, 48, 48, 87, 48, 48, 87,
+  48, 48, 48, 87, 48, 48, 48, 87, 118, 144,
+  165, 48, 87, 118, 48, 48, 48, 48, 87, 48,
+  87, 48, 48, 87, 118, 48, 48, 87, 118, 144,
+  165, 48, 48, 48, 48, 87, 48, 48, 87, 48
+};
+#endif
+
 static GLuint fuzz_texid = 0;
 
 void gld_InitFuzzTexture(void)
@@ -1356,11 +1379,16 @@ void gld_InitFuzzTexture(void)
     glGenTextures(1, &fuzz_texid);
     glBindTexture(GL_TEXTURE_2D, fuzz_texid);
 
+#ifndef __vita__
     glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, GL_FALSE);
-
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED,
                  sizeof(fuzz) / sizeof(*fuzz), 1, 0, GL_RED,
                  GL_FLOAT, fuzz);
+#else
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED,
+                 sizeof(fuzz_vita) / sizeof(*fuzz_vita), 1, 0, GL_RED,
+                 GL_UNSIGNED_BYTE, fuzz_vita);
+#endif
 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
