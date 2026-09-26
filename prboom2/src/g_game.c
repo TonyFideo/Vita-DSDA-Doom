@@ -118,6 +118,10 @@
 #include "dsda/split_tracker.h"
 #include "dsda/utility.h"
 
+#ifdef __vita__
+#include "vita/vita_system.h"
+#endif
+
 // Allows use of HELP2 screen for PWADs under DOOM 1
 int pwad_help2_check;
 
@@ -1282,6 +1286,9 @@ static void G_DoLoadLevel (void)
     if (first)
       {
         starttime = dsda_GetTickRealTime();
+#ifdef __vita__
+        Vita_ProfileReset();
+#endif
         first=0;
       }
   }
@@ -4034,9 +4041,31 @@ dboolean G_CheckDemoStatus (void)
 
     M_SaveDefaults();
 
-    lprintf(LO_INFO, "Timed %u gametics in %u realtics = %-.1f frames per second\n",
-             (unsigned) gametic,realtics,
-             (unsigned) gametic * (double) TICRATE / realtics);
+    {
+      const double fps = realtics
+        ? (unsigned)gametic * (double)TICRATE / realtics
+        : 0.0;
+
+      lprintf(
+        LO_INFO,
+        "Timed %u gametics in %u realtics = %-.1f frames per second\n",
+        (unsigned)gametic,
+        realtics,
+        fps
+      );
+
+#ifdef __vita__
+      Vita_Log(
+        "[VITA] timedemo result: demo=%s gametics=%u realtics=%u seconds=%.3f fps=%.2f\n",
+        dsda_PlaybackName() ? dsda_PlaybackName() : "unknown",
+        (unsigned)gametic,
+        realtics,
+        (double)realtics / TICRATE,
+        fps
+      );
+      Vita_ProfileLog();
+#endif
+    }
 
     if (dsda_IntConfig(dsda_config_demo_end_quit))
       I_SafeExit(0);

@@ -34,7 +34,15 @@
 #ifndef _GL_STRUCT_H
 #define _GL_STRUCT_H
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
+#ifdef DSDA_ENABLE_OPENGL_RENDERER
 #include <SDL_opengl.h>
+#else
+typedef unsigned int GLuint;
+#endif
 
 extern dboolean use_gl_nodes;
 

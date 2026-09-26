@@ -74,6 +74,10 @@
 
 #include "hexen/a_action.h"
 
+#ifdef __vita__
+#include "vita/vita_system.h"
+#endif
+
 // e6y
 // Now they are variables. Depends from render_doom_lightmaps variable.
 // Unify colour maping logic by cph is removed, because of bugs.
@@ -1071,11 +1075,28 @@ static void R_RenderBSPNodes(void)
 
 void R_RenderPlayerView (player_t* player)
 {
+#ifdef __vita__
+  unsigned int vita_prof_start = 0;
+#endif
+
   r_frame_count++;
 
+#ifdef __vita__
+  if (Vita_ProfileActive())
+    vita_prof_start = Vita_ProfileTimestamp();
+#endif
   DSDA_ADD_CONTEXT(sf_setup_frame);
   R_SetupFrame (player);
   DSDA_REMOVE_CONTEXT(sf_setup_frame);
+#ifdef __vita__
+  if (vita_prof_start)
+    Vita_ProfileAdd(
+      VITA_PROFILE_SETUP,
+      (unsigned int)(Vita_ProfileTimestamp() - vita_prof_start)
+    );
+  if (Vita_ProfileActive())
+    vita_prof_start = Vita_ProfileTimestamp();
+#endif
 
   DSDA_ADD_CONTEXT(sf_clear);
   R_ClearClipSegs ();
@@ -1083,10 +1104,26 @@ void R_RenderPlayerView (player_t* player)
   R_ClearPlanes ();
   R_ClearSprites ();
   DSDA_REMOVE_CONTEXT(sf_clear);
+#ifdef __vita__
+  if (vita_prof_start)
+    Vita_ProfileAdd(
+      VITA_PROFILE_CLEAR,
+      (unsigned int)(Vita_ProfileTimestamp() - vita_prof_start)
+    );
+  if (Vita_ProfileActive())
+    vita_prof_start = Vita_ProfileTimestamp();
+#endif
 
   DSDA_ADD_CONTEXT(sf_init_scene);
   R_InitDrawScene();
   DSDA_REMOVE_CONTEXT(sf_init_scene);
+#ifdef __vita__
+  if (vita_prof_start)
+    Vita_ProfileAdd(
+      VITA_PROFILE_INIT_SCENE,
+      (unsigned int)(Vita_ProfileTimestamp() - vita_prof_start)
+    );
+#endif
 
   FakeNetUpdate();
 
@@ -1096,30 +1133,86 @@ void R_RenderPlayerView (player_t* player)
     DSDA_REMOVE_CONTEXT(sf_gl_frustum);
   }
 
+#ifdef __vita__
+  Vita_ProfileSetWallPhase(1);
+  if (Vita_ProfileActive())
+    vita_prof_start = Vita_ProfileTimestamp();
+#endif
   DSDA_ADD_CONTEXT(sf_bsp_nodes);
   R_RenderBSPNodes();
+#ifdef __vita__
+  /* The fused four-column Vita path defers raster work until flush. Keep the
+   * final partial wall batch inside the BSP timer/profile rather than letting
+   * planes or reset_columns inherit that cost. */
+  R_VitaFlushDeferredWallColumns();
+#endif
   DSDA_REMOVE_CONTEXT(sf_bsp_nodes);
+#ifdef __vita__
+  if (vita_prof_start)
+  {
+    const unsigned int vita_bsp_elapsed =
+      (unsigned int)(Vita_ProfileTimestamp() - vita_prof_start);
+
+    Vita_ProfileAdd(VITA_PROFILE_BSP_WALLS, vita_bsp_elapsed);
+    if (Vita_ProfileWallDeepActive())
+      Vita_ProfileWallAdd(VITA_WALL_PROFILE_BSP_SAMPLE, vita_bsp_elapsed);
+  }
+  Vita_ProfileSetWallPhase(0);
+#endif
 
   FakeNetUpdate();
 
   if (V_IsSoftwareMode())
   {
+#ifdef __vita__
+    if (Vita_ProfileActive())
+      vita_prof_start = Vita_ProfileTimestamp();
+#endif
     DSDA_ADD_CONTEXT(sf_draw_planes);
     R_DrawPlanes();
     DSDA_REMOVE_CONTEXT(sf_draw_planes);
+#ifdef __vita__
+    if (vita_prof_start)
+      Vita_ProfileAdd(
+        VITA_PROFILE_PLANES,
+        (unsigned int)(Vita_ProfileTimestamp() - vita_prof_start)
+      );
+#endif
   }
 
+#ifdef __vita__
+  if (Vita_ProfileActive())
+    vita_prof_start = Vita_ProfileTimestamp();
+#endif
   DSDA_ADD_CONTEXT(sf_reset_column_buffer);
   R_ResetColumnBuffer();
   DSDA_REMOVE_CONTEXT(sf_reset_column_buffer);
+#ifdef __vita__
+  if (vita_prof_start)
+    Vita_ProfileAdd(
+      VITA_PROFILE_RESET_COLUMNS,
+      (unsigned int)(Vita_ProfileTimestamp() - vita_prof_start)
+    );
+#endif
 
   FakeNetUpdate();
 
   if (V_IsSoftwareMode()) {
+#ifdef __vita__
+    if (Vita_ProfileActive())
+      vita_prof_start = Vita_ProfileTimestamp();
+#endif
     DSDA_ADD_CONTEXT(sf_draw_masked);
     R_DrawMasked ();
     R_ResetColumnBuffer();
     DSDA_REMOVE_CONTEXT(sf_draw_masked);
+#ifdef __vita__
+    if (vita_prof_start)
+      Vita_ProfileAdd(
+        VITA_PROFILE_MASKED,
+        (unsigned int)(Vita_ProfileTimestamp() - vita_prof_start)
+      );
+#endif
   }
 
   FakeNetUpdate();
@@ -1130,4 +1223,8 @@ void R_RenderPlayerView (player_t* player)
     gld_EndDrawScene();
     DSDA_REMOVE_CONTEXT(sf_draw_scene);
   }
+
+#ifdef __vita__
+  Vita_ProfileFrame();
+#endif
 }

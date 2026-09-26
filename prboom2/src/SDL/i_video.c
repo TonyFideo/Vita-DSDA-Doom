@@ -95,6 +95,11 @@
 #include "dsda/time.h"
 #include "dsda/gl/render_scale.h"
 
+#ifdef __vita__
+#include "vita/vita_system.h"
+#include "vita/vita_video.h"
+#endif
+
 //e6y: new mouse code
 static SDL_Cursor* cursors[2] = {NULL, NULL};
 
@@ -505,9 +510,17 @@ void I_InitMouse(void)
 
 static void I_InitInputs(void)
 {
+#ifdef __vita__
+  /*
+   * SDL is kept for controller/events/audio, but VitaGL owns the display.
+   * Do not initialize the SDL mouse/cursor video path on Vita.
+   */
+  dsda_InitGameController();
+#else
   AccelChanging();
   I_InitMouse();
   dsda_InitGameController();
+#endif
 }
 
 ///////////////////////////////////////////////////////////
@@ -553,6 +566,7 @@ static void I_UploadNewPalette(int pal, int force)
       playpal_data->colours[i].r = gtable[palette[0]];
       playpal_data->colours[i].g = gtable[palette[1]];
       playpal_data->colours[i].b = gtable[palette[2]];
+      playpal_data->colours[i].a = SDL_ALPHA_OPAQUE;
       palette += 3;
     }
 
@@ -566,6 +580,14 @@ static void I_UploadNewPalette(int pal, int force)
 #endif
 
   SDL_SetPaletteColors(screen->format->palette, playpal_data->colours + 256 * pal, 0, 256);
+
+#ifdef __vita__
+  /*
+   * The Vita presenter consumes the same RGBA byte layout as SDL_Color.
+   * Pass the active PLAYPAL directly to its persistent P8 palette.
+   */
+  Vita_VideoSetPalette(playpal_data->colours + 256 * pal);
+#endif
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -573,8 +595,12 @@ static void I_UploadNewPalette(int pal, int force)
 
 void I_ShutdownGraphics(void)
 {
+#ifdef __vita__
+  Vita_VideoShutdown();
+#else
   SDL_FreeCursor(cursors[1]);
   DeactivateMouse();
+#endif
 }
 
 static dboolean queue_frame_capture;
@@ -613,6 +639,33 @@ static int newpal = 0;
 
 void I_FinishUpdate (void)
 {
+#ifdef __vita__
+  if (!screen)
+    return;
+
+  if (newpal != NO_PALETTE_CHANGE) {
+    I_UploadNewPalette(newpal, false);
+    newpal = NO_PALETTE_CHANGE;
+  }
+
+  Vita_VideoPresent(SCREENWIDTH, SCREENHEIGHT);
+
+  /*
+   * Capture the frame that was just submitted before rotating the software
+   * framebuffer. Then point SDL, V_* and the renderer's hot draw pointer at
+   * the next RAM/GXM slot. No framebuffer copy occurs.
+   */
+  I_HandleCapture();
+
+  screen->pixels = Vita_VideoRenderBuffer();
+  screen->pitch = Vita_VideoRenderPitch();
+  screens[0].data = (unsigned char *)screen->pixels;
+  screens[0].pitch = screen->pitch;
+  drawvars.topleft = screens[0].data;
+  drawvars.pitch = screens[0].pitch;
+  return;
+#else
+
   if (V_IsOpenGLMode()) {
     // proff 04/05/2000: swap OpenGL buffers
     gld_Finish();
@@ -665,6 +718,7 @@ void I_FinishUpdate (void)
 
   // Draw!
   SDL_RenderPresent(sdl_renderer);
+#endif
 }
 
 //
@@ -683,6 +737,9 @@ void I_SetPalette (int pal)
 
 static void I_ShutdownSDL(void)
 {
+#ifdef __vita__
+  Vita_VideoShutdown();
+#endif
   if (sdl_glcontext) SDL_GL_DeleteContext(sdl_glcontext);
   if (screen) SDL_FreeSurface(screen);
   if (buffer) SDL_FreeSurface(buffer);
@@ -703,10 +760,14 @@ void I_PreInitGraphics(void)
 {
   int p;
 
-  // Initialize SDL
+  // Initialize SDL. On Vita the display is owned by VitaGL, not SDL.
   unsigned int flags = 0;
+#ifdef __vita__
+  flags = SDL_INIT_EVENTS;
+#else
   if (!(dsda_Flag(dsda_arg_nodraw) && dsda_Flag(dsda_arg_nosound)))
     flags = SDL_INIT_VIDEO;
+#endif
 #ifdef PRBOOM_DEBUG
   flags |= SDL_INIT_NOPARACHUTE;
 #endif
@@ -961,6 +1022,13 @@ void I_CalculateRes(int width, int height)
   SCREENWIDTH = width;
   SCREENHEIGHT = height;
 
+#ifdef __vita__
+  /*
+   * The desktop microbenchmark was designed around old x86 caches.
+   * Keep the Vita bring-up deterministic; profile alternate pitches later.
+   */
+  SCREENPITCH = (SCREENWIDTH + 15) & ~15;
+#else
   if (V_IsOpenGLMode())
   {
     SCREENPITCH = SCREENWIDTH;
@@ -998,6 +1066,7 @@ void I_CalculateRes(int width, int height)
       lprintf(LO_DEBUG, " optimized screen pitch is %d\n", SCREENPITCH);
     }
   }
+#endif
 }
 
 static video_mode_t I_GetModeFromString(const char *modestr)
@@ -1016,6 +1085,9 @@ static video_mode_t I_GetModeFromString(const char *modestr)
 }
 
 static video_mode_t I_DesiredVideoMode(void) {
+#ifdef __vita__
+  return VID_MODESW;
+#else
   dsda_arg_t *arg;
   video_mode_t mode;
 
@@ -1026,6 +1098,7 @@ static video_mode_t I_DesiredVideoMode(void) {
     mode = I_GetModeFromString(dsda_StringConfig(dsda_config_videomode));
 
   return mode;
+#endif
 }
 
 // CPhipps -
@@ -1037,7 +1110,48 @@ void I_InitScreenResolution(void)
   char c, x;
   dsda_arg_t *arg;
   video_mode_t mode;
+#ifdef __vita__
+  int init = (screen == NULL);
+#else
   int init = (sdl_window == NULL);
+#endif
+
+#ifdef __vita__
+  (void)c;
+  (void)x;
+  (void)arg;
+  (void)init;
+
+  desired_fullscreen = 1;
+  w = Vita_VideoInternalWidth();
+  h = Vita_VideoInternalHeight();
+  desired_screenwidth = w;
+  desired_screenheight = h;
+
+  mode = VID_MODESW;
+  V_InitMode(mode);
+
+  I_CalculateRes(w, h);
+  V_FreeScreens();
+
+  for (i = 0; i < 3; ++i) {
+    screens[i].width = SCREENWIDTH;
+    screens[i].height = SCREENHEIGHT;
+    screens[i].pitch = SCREENPITCH;
+  }
+
+  screens[4].width = SCREENWIDTH;
+  screens[4].height = SCREENHEIGHT;
+  screens[4].pitch = SCREENPITCH;
+
+  I_InitBuffersRes();
+
+  Vita_Log("[VITA] renderer: SOFTWARE %dx%d pitch=%d\n",
+           SCREENWIDTH, SCREENHEIGHT, SCREENPITCH);
+  lprintf(LO_DEBUG, "I_InitScreenResolution: Vita software resolution %dx%d\n",
+          SCREENWIDTH, SCREENHEIGHT);
+  return;
+#else
 
   I_GetScreenResolution();
 
@@ -1122,6 +1236,7 @@ void I_InitScreenResolution(void)
   I_InitBuffersRes();
 
   lprintf(LO_DEBUG, "I_InitScreenResolution: Using resolution %dx%d\n", SCREENWIDTH, SCREENHEIGHT);
+#endif
 }
 
 //
@@ -1130,7 +1245,9 @@ void I_InitScreenResolution(void)
 
 void I_SetWindowCaption(void)
 {
+#ifndef __vita__
   SDL_SetWindowTitle(NULL, PROJECT_NAME " " PROJECT_VERSION);
+#endif
 }
 
 //
@@ -1141,6 +1258,9 @@ void I_SetWindowCaption(void)
 
 void I_SetWindowIcon(void)
 {
+#ifdef __vita__
+  return;
+#else
   static SDL_Surface *surface = NULL;
 
   // do it only once, because of crash in SDL_InitVideoMode in SDL 1.3
@@ -1155,6 +1275,7 @@ void I_SetWindowIcon(void)
   {
     SDL_SetWindowIcon(NULL, surface);
   }
+#endif
 }
 
 void I_InitGraphics(void)
@@ -1181,13 +1302,116 @@ void I_InitGraphics(void)
     I_InitInputs();
 
     //e6y: new mouse code
+#ifndef __vita__
     UpdateFocus();
     UpdateGrab();
+#else
+    window_focused = true;
+#endif
   }
 }
 
 void I_UpdateVideoMode(void)
 {
+#ifdef __vita__
+  const dboolean vita_vsync =
+    dsda_IntConfig(dsda_config_render_vsync) &&
+    !dsda_Flag(dsda_arg_timedemo) &&
+    !dsda_Flag(dsda_arg_fastdemo);
+
+  if (screen)
+  {
+    /*
+     * screens[0] aliases screen->pixels in the Vita direct-access path.
+     * Detach it before SDL releases the surface.
+     */
+    screens[0].data = NULL;
+    screens[0].not_on_heap = false;
+    SDL_FreeSurface(screen);
+    screen = NULL;
+  }
+
+  if (buffer)
+  {
+    SDL_FreeSurface(buffer);
+    buffer = NULL;
+  }
+
+  if (!Vita_VideoInit())
+    I_Error("VitaGL initialization failed");
+
+  Vita_VideoSetVSync(vita_vsync);
+
+  if (!Vita_VideoResize(SCREENWIDTH, SCREENHEIGHT))
+    I_Error("Unable to create Vita software presentation texture %dx%d",
+            SCREENWIDTH, SCREENHEIGHT);
+
+  ACTUALHEIGHT = SCREENHEIGHT;
+  desired_fullscreen = 1;
+  exclusive_fullscreen = 0;
+
+  /*
+   * SDL remains the palette/capture wrapper, but it no longer owns or allocates
+   * the pixels. Its pixels point directly at the current CPU/GPU shared P8
+   * slot supplied by VitaGL.
+   */
+  screen = SDL_CreateRGBSurfaceFrom(
+    Vita_VideoRenderBuffer(),
+    SCREENWIDTH,
+    SCREENHEIGHT,
+    8,
+    Vita_VideoRenderPitch(),
+    0, 0, 0, 0
+  );
+
+  if (!screen)
+    I_Error("Unable to create Vita zero-copy surface %dx%d: %s",
+            SCREENWIDTH, SCREENHEIGHT, SDL_GetError());
+
+  screens[0].not_on_heap = true;
+  screens[0].data = (unsigned char *)screen->pixels;
+  screens[0].pitch = screen->pitch;
+
+  V_AllocScreens();
+  R_InitBuffer(SCREENWIDTH, SCREENHEIGHT);
+
+  R_ExecuteSetViewSize();
+
+  V_SetPalette(0);
+  I_UploadNewPalette(0, true);
+
+  ST_SetResolution();
+  AM_SetResolution();
+
+  src_rect.x = 0;
+  src_rect.y = 0;
+  src_rect.w = SCREENWIDTH;
+  src_rect.h = SCREENHEIGHT;
+
+  renderer_rect.x = 0;
+  renderer_rect.y = 0;
+  renderer_rect.w = VITA_DISPLAY_WIDTH;
+  renderer_rect.h = VITA_DISPLAY_HEIGHT;
+
+  window_rect.x = 0;
+  window_rect.y = 0;
+  window_rect.w = VITA_DISPLAY_WIDTH;
+  window_rect.h = VITA_DISPLAY_HEIGHT;
+
+  viewport_rect = window_rect;
+  window_focused = true;
+
+  Vita_Log(
+    "[VITA] video mode ready: software=%dx%d display=%dx%d zero_copy=1 pitch=%d\n",
+    SCREENWIDTH,
+    SCREENHEIGHT,
+    VITA_DISPLAY_WIDTH,
+    VITA_DISPLAY_HEIGHT,
+    screen->pitch
+  );
+  return;
+#else
+
   int init_flags = SDL_WINDOW_ALLOW_HIGHDPI;
   int screen_multiply;
   int render_vsync;
@@ -1441,6 +1665,7 @@ void I_UpdateVideoMode(void)
 
   src_rect.w = SCREENWIDTH;
   src_rect.h = SCREENHEIGHT;
+#endif
 }
 
 static void ActivateMouse(void)
@@ -1656,6 +1881,14 @@ static void ApplyWindowResize(SDL_Event *resize_event)
 
 void I_SetWindowRect()
 {
+#ifdef __vita__
+  window_rect.x = 0;
+  window_rect.y = 0;
+  window_rect.w = VITA_DISPLAY_WIDTH;
+  window_rect.h = VITA_DISPLAY_HEIGHT;
+
+  renderer_rect = window_rect;
+#else
   SDL_GetWindowPosition(sdl_window, &window_rect.x, &window_rect.y);
   SDL_GetWindowSize(sdl_window, &window_rect.w, &window_rect.h);
 
@@ -1663,6 +1896,7 @@ void I_SetWindowRect()
     SDL_GL_GetDrawableSize(sdl_window, &renderer_rect.w, &renderer_rect.h);
   else
     SDL_GetRendererOutputSize(sdl_renderer, &renderer_rect.w, &renderer_rect.h);
+#endif
 }
 
 void I_SetViewportRect()

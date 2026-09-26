@@ -47,6 +47,10 @@
 
 #include "dsda/stretch.h"
 
+#ifdef __vita__
+#include "vita/vita_system.h"
+#endif
+
 //
 // All drawing to the view buffer is accomplished in this file.
 // The other refresh files only know about ccordinates,
@@ -97,6 +101,31 @@ static int    commontop, commonbot;
 static const byte *temptranmap = NULL;
 // SoM 7-28-04: Fix the fuzz problem.
 static const byte   *tempfuzzmap;
+
+#ifdef __vita__
+typedef struct
+{
+   const byte *source;
+   const lighttable_t *colormap;
+   uint32_t frac;
+   uint32_t fracstep;
+   uint32_t fixedt_heightmask;
+   int yl;
+   int yh;
+} vita_fused_column_t;
+
+static vita_fused_column_t vita_fused_columns[4];
+static int vita_fused4_pending;
+static vita_wall_fused_fallback_t vita_fused4_flush_reason =
+   VITA_WALL_FUSED_FALLBACK_PARTIAL_END;
+
+static void R_VitaFlushDeferred4(int profile_deep);
+static int R_VitaTryQueueFused4(
+   const draw_column_vars_t *dcvars,
+   fixed_t frac,
+   fixed_t fracstep
+);
+#endif
 
 //
 // Spectre/Invisibility.
@@ -179,6 +208,20 @@ static void (*R_FlushQuadColumn)(void) = R_QuadFlushError;
 
 static void R_FlushColumns(void)
 {
+#ifdef __vita__
+   const int vita_wall_deep = Vita_ProfileWallDeepActive();
+
+   if (vita_wall_deep)
+      Vita_ProfileWallFlush();
+
+   if (vita_fused4_pending)
+   {
+      R_VitaFlushDeferred4(vita_wall_deep);
+      temp_x = 0;
+      return;
+   }
+#endif
+
    if(temp_x != 4 || commontop >= commonbot)
       R_FlushWholeColumns();
    else
@@ -224,6 +267,235 @@ void R_ResetColumnBuffer(void)
 #define R_FLUSHHEADTAIL_FUNCNAME R_FlushHTFuzz
 #define R_FLUSHQUAD_FUNCNAME R_FlushQuadFuzz
 #include "r_drawflush.inl"
+
+#ifdef __vita__
+static inline byte R_VitaSampleFusedColumn(
+   const vita_fused_column_t *column,
+   uint32_t *frac
+)
+{
+   const byte result = column->colormap[
+      column->source[(*frac & column->fixedt_heightmask) >> FRACBITS]
+   ];
+
+   *frac += column->fracstep;
+   return result;
+}
+
+static void R_VitaDrawFusedColumnDirect(int lane, int y1, int y2, uint32_t *frac)
+{
+   const vita_fused_column_t *column = &vita_fused_columns[lane];
+   byte *dest;
+   int y;
+
+   if (y1 > y2)
+      return;
+
+   dest = drawvars.topleft + y1 * drawvars.pitch + startx + lane;
+   for (y = y1; y <= y2; ++y)
+   {
+      *dest = R_VitaSampleFusedColumn(column, frac);
+      dest += drawvars.pitch;
+   }
+}
+
+static void R_VitaFlushDeferred4(int profile_deep)
+{
+   uint32_t frac[4];
+   byte *dest;
+   int lane;
+   int y;
+
+   if (temp_x != 4 || commontop >= commonbot)
+   {
+      if (profile_deep)
+      {
+         const vita_wall_fused_fallback_t reason =
+            temp_x == 4 && commontop >= commonbot
+               ? VITA_WALL_FUSED_FALLBACK_NO_COMMON
+               : vita_fused4_flush_reason;
+         Vita_ProfileWallFused4Fallback(reason);
+      }
+
+      for (lane = 0; lane < temp_x; ++lane)
+      {
+         frac[lane] = vita_fused_columns[lane].frac;
+         R_VitaDrawFusedColumnDirect(
+            lane,
+            vita_fused_columns[lane].yl,
+            vita_fused_columns[lane].yh,
+            &frac[lane]
+         );
+      }
+
+      vita_fused4_pending = 0;
+      vita_fused4_flush_reason = VITA_WALL_FUSED_FALLBACK_PARTIAL_END;
+      return;
+   }
+
+   if (profile_deep)
+      Vita_ProfileWallFused4Success(
+         (unsigned int)(commonbot - commontop + 1) * 4u
+      );
+
+   /*
+    * Preserve the exact per-column frac progression. Heads advance each lane
+    * up to the shared body; the fused body then advances all four lanes once
+    * per row; tails continue from those exact resulting fractions.
+    */
+   for (lane = 0; lane < 4; ++lane)
+   {
+      const vita_fused_column_t *column = &vita_fused_columns[lane];
+
+      frac[lane] = column->frac;
+      R_VitaDrawFusedColumnDirect(
+         lane,
+         column->yl,
+         commontop - 1,
+         &frac[lane]
+      );
+   }
+
+   dest = drawvars.topleft + commontop * drawvars.pitch + startx;
+
+   for (y = commontop; y <= commonbot; ++y)
+   {
+      const byte p0 = R_VitaSampleFusedColumn(&vita_fused_columns[0], &frac[0]);
+      const byte p1 = R_VitaSampleFusedColumn(&vita_fused_columns[1], &frac[1]);
+      const byte p2 = R_VitaSampleFusedColumn(&vita_fused_columns[2], &frac[2]);
+      const byte p3 = R_VitaSampleFusedColumn(&vita_fused_columns[3], &frac[3]);
+      const uint32_t packed =
+         (uint32_t)p0 |
+         ((uint32_t)p1 << 8) |
+         ((uint32_t)p2 << 16) |
+         ((uint32_t)p3 << 24);
+
+      /*
+       * Cortex-A9/Vita permits unaligned word stores. memcpy avoids C aliasing
+       * and alignment UB while GCC folds this fixed four-byte copy to one STR.
+       */
+      memcpy(dest, &packed, sizeof(packed));
+
+      dest += drawvars.pitch;
+   }
+
+   for (lane = 0; lane < 4; ++lane)
+   {
+      const vita_fused_column_t *column = &vita_fused_columns[lane];
+
+      R_VitaDrawFusedColumnDirect(
+         lane,
+         commonbot + 1,
+         column->yh,
+         &frac[lane]
+      );
+   }
+
+   vita_fused4_pending = 0;
+   vita_fused4_flush_reason = VITA_WALL_FUSED_FALLBACK_PARTIAL_END;
+}
+
+static int R_VitaTryQueueFused4(
+   const draw_column_vars_t *dcvars,
+   fixed_t frac,
+   fixed_t fracstep
+)
+{
+   vita_fused_column_t *column;
+   const unsigned int height = (unsigned int)dcvars->texheight;
+   const int base_eligible =
+      (dcvars->flags & DRAW_COLUMN_VITA_FUSED4) &&
+      !(dcvars->flags & DRAW_COLUMN_ISPATCH) &&
+      !dcvars->drawingmasked &&
+      !dcvars->pspritepostheight &&
+      dcvars->source &&
+      dcvars->colormap;
+   const int eligible =
+      base_eligible && height && !(height & (height - 1u));
+
+   if (!eligible)
+   {
+      if (Vita_ProfileWallDeepActive())
+      {
+         if (base_eligible && !height)
+            Vita_ProfileWallFusedReject(VITA_WALL_FUSED_REJECT_ZERO_HEIGHT);
+         else if (base_eligible && (height & (height - 1u)))
+            Vita_ProfileWallFusedReject(VITA_WALL_FUSED_REJECT_NON_POT);
+         else
+            Vita_ProfileWallFusedReject(VITA_WALL_FUSED_REJECT_OTHER);
+      }
+
+      if (vita_fused4_pending)
+      {
+         if (base_eligible && !height)
+            vita_fused4_flush_reason = VITA_WALL_FUSED_FALLBACK_ZERO_HEIGHT;
+         else if (base_eligible && (height & (height - 1u)))
+            vita_fused4_flush_reason = VITA_WALL_FUSED_FALLBACK_NON_POT;
+         else
+            vita_fused4_flush_reason = VITA_WALL_FUSED_FALLBACK_OTHER;
+         R_FlushColumns();
+      }
+      return 0;
+   }
+
+   /* Never mix deferred columns with an already materialized legacy batch. */
+   if (temp_x && !vita_fused4_pending)
+      R_FlushColumns();
+
+   if (temp_x == 4)
+      R_FlushColumns();
+
+   if (temp_x && temp_x + startx != dcvars->x)
+   {
+      vita_fused4_flush_reason =
+         dcvars->x == startx + temp_x - 1
+            ? VITA_WALL_FUSED_FALLBACK_SAME_X
+            : VITA_WALL_FUSED_FALLBACK_X_GAP;
+      R_FlushColumns();
+   }
+
+   if (!temp_x)
+   {
+      vita_fused4_flush_reason = VITA_WALL_FUSED_FALLBACK_PARTIAL_END;
+      startx = dcvars->x;
+      tempyl[0] = commontop = dcvars->yl;
+      tempyh[0] = commonbot = dcvars->yh;
+      temptype = COL_OPAQUE;
+      vita_fused4_pending = 1;
+   }
+   else
+   {
+      tempyl[temp_x] = dcvars->yl;
+      tempyh[temp_x] = dcvars->yh;
+
+      if (dcvars->yl > commontop)
+         commontop = dcvars->yl;
+      if (dcvars->yh < commonbot)
+         commonbot = dcvars->yh;
+   }
+
+   column = &vita_fused_columns[temp_x];
+   column->source = dcvars->source;
+   column->colormap = dcvars->colormap;
+   column->frac = (uint32_t)frac;
+   column->fracstep = (uint32_t)fracstep;
+   column->fixedt_heightmask = ((height - 1u) << FRACBITS) | (FRACUNIT - 1u);
+   column->yl = dcvars->yl;
+   column->yh = dcvars->yh;
+
+   ++temp_x;
+   return 1;
+}
+
+void R_VitaFlushDeferredWallColumns(void)
+{
+   if (vita_fused4_pending)
+   {
+      vita_fused4_flush_reason = VITA_WALL_FUSED_FALLBACK_PARTIAL_END;
+      R_FlushColumns();
+   }
+}
+#endif
 
 //
 // R_DrawColumn
@@ -448,6 +720,53 @@ void R_DrawSpan(draw_span_vars_t *dsvars) {
   const byte *source = dsvars->source;
   const byte *colormap = dsvars->colormap;
   byte *dest = drawvars.topleft + dsvars->y*drawvars.pitch + dsvars->x1;
+
+#ifdef __vita__
+  while (count >= 4) {
+    uint32_t packed;
+    fixed_t xtemp;
+    fixed_t ytemp;
+    fixed_t spot;
+    byte p0, p1, p2, p3;
+
+    xtemp = (xfrac >> 16) & 63;
+    ytemp = (yfrac >> 10) & 4032;
+    spot = xtemp | ytemp;
+    p0 = colormap[source[spot]];
+    xfrac += xstep;
+    yfrac += ystep;
+
+    xtemp = (xfrac >> 16) & 63;
+    ytemp = (yfrac >> 10) & 4032;
+    spot = xtemp | ytemp;
+    p1 = colormap[source[spot]];
+    xfrac += xstep;
+    yfrac += ystep;
+
+    xtemp = (xfrac >> 16) & 63;
+    ytemp = (yfrac >> 10) & 4032;
+    spot = xtemp | ytemp;
+    p2 = colormap[source[spot]];
+    xfrac += xstep;
+    yfrac += ystep;
+
+    xtemp = (xfrac >> 16) & 63;
+    ytemp = (yfrac >> 10) & 4032;
+    spot = xtemp | ytemp;
+    p3 = colormap[source[spot]];
+    xfrac += xstep;
+    yfrac += ystep;
+
+    packed =
+      (uint32_t)p0 |
+      ((uint32_t)p1 << 8) |
+      ((uint32_t)p2 << 16) |
+      ((uint32_t)p3 << 24);
+    memcpy(dest, &packed, sizeof(packed));
+    dest += 4;
+    count -= 4;
+  }
+#endif
 
   while (count) {
     const fixed_t xtemp = (xfrac >> 16) & 63;

@@ -21,6 +21,24 @@ option(STRICT_FIND "Fail configuration if an optional dependency is not found" O
 option(SIMPLECHECKS "Enable checks which only impose significant overhead if a posible error is detected" ON)
 option(RANGECHECK "Enable internal range checking" OFF)
 
+option(DSDA_ENABLE_OPENGL_RENDERER "Build the native DSDA OpenGL renderer" ON)
+option(DSDA_VITA_PRESENT_VITAGL "Use VitaGL to present the software framebuffer on Vita" OFF)
+
+if(VITA)
+  # Vita starts with the software renderer. VitaGL is only the presentation
+  # backend in this phase; the DSDA gld_* renderer stays disabled.
+  set(DSDA_ENABLE_OPENGL_RENDERER OFF CACHE BOOL "Build the native DSDA OpenGL renderer" FORCE)
+  set(DSDA_VITA_PRESENT_VITAGL ON CACHE BOOL "Use VitaGL to present the software framebuffer on Vita" FORCE)
+
+  set(VITA_TITLEID "DSDA02689" CACHE STRING "PS Vita title id")
+  set(VITA_APP_NAME "Vita-DSDA-Doom" CACHE STRING "PS Vita application name")
+  set(VITA_VERSION "01.00" CACHE STRING "PS Vita application version")
+  set(VITA_DISPLAY_WIDTH 960 CACHE STRING "PS Vita physical display width")
+  set(VITA_DISPLAY_HEIGHT 544 CACHE STRING "PS Vita physical display height")
+  set(VITA_SOFTWARE_WIDTH 960 CACHE STRING "Default DSDA software render width")
+  set(VITA_SOFTWARE_HEIGHT 544 CACHE STRING "Default DSDA software render height")
+endif()
+
 option(CMAKE_FIND_PACKAGE_PREFER_CONFIG "Search for package config before using Find modules" ON)
 
 if(IS_ABSOLUTE "${DSDAPWADDIR}")

@@ -65,6 +65,62 @@
 #include "dsda/render_stats.h"
 #include "dsda/configuration.h"
 
+#ifdef __vita__
+#include "vita/vita_system.h"
+
+static uint32_t *vita_plane_row_div_magic;
+
+/*
+ * R_MapPlane divides by FRACUNIT^2 * abs(centery-y), i.e. exactly 2^32*k.
+ * For a positive magnitude M:
+ *
+ *   floor(M / (2^32*k)) == floor((M >> 32) / k)
+ *
+ * so the hot miss path only needs a 32/32 quotient by the small row distance
+ * k.  Precomputed ceil(2^32/k) multipliers provide a one-multiply estimate;
+ * one exact product correction keeps the result bit-identical to integer
+ * division while avoiding both VFP vdiv and libgcc integer divide helpers.
+ */
+static inline uint32_t R_VitaPlaneRowDivExact(uint32_t num, uint32_t den)
+{
+  uint32_t q;
+  uint64_t product;
+
+  if (den == 1u)
+    return num;
+
+  q = (uint32_t)(((uint64_t)num * vita_plane_row_div_magic[den]) >> 32);
+  product = (uint64_t)q * den;
+
+  if (product > num)
+  {
+    --q;
+  }
+  else if (product + den <= num)
+  {
+    ++q;
+  }
+
+  return q;
+}
+
+static inline int64_t R_VitaPlaneDiv64Exact(int64_t num, uint32_t row_distance)
+{
+  const int negative = num < 0;
+  const uint64_t magnitude = negative
+    ? 0u - (uint64_t)num
+    : (uint64_t)num;
+  uint32_t q;
+
+  if (!row_distance)
+    return num < 0 ? INT64_MIN : INT64_MAX;
+
+  q = R_VitaPlaneRowDivExact((uint32_t)(magnitude >> 32), row_distance);
+
+  return negative ? -(int64_t)q : (int64_t)q;
+}
+#endif
+
 int Sky1Texture;
 int Sky2Texture;
 fixed_t Sky1ColumnOffset;
@@ -111,6 +167,15 @@ static int *spanstart = NULL;                // killough 2/8/98
 // killough 2/8/98: make variables static
 
 static fixed_t *cachedheight = NULL;
+static fixed_t *cachedsine = NULL;
+static fixed_t *cachedcosine = NULL;
+static fixed_t *cacheddistance = NULL;
+static fixed_t *cachedxstep = NULL;
+static fixed_t *cachedystep = NULL;
+static fixed_t *cachedcosdistance = NULL;
+static fixed_t *cachedsindistance = NULL;
+static byte *cachevalid = NULL;
+static byte *cachemru = NULL;
 
 // e6y: resolution limitation is removed
 fixed_t *yslope = NULL;
@@ -118,11 +183,27 @@ fixed_t *distscale = NULL;
 
 void R_InitPlanesRes(void)
 {
+#ifdef __vita__
+  int i;
+#endif
+
   if (floorclip) Z_Free(floorclip);
   if (ceilingclip) Z_Free(ceilingclip);
   if (spanstart) Z_Free(spanstart);
 
   if (cachedheight) Z_Free(cachedheight);
+  if (cachedsine) Z_Free(cachedsine);
+  if (cachedcosine) Z_Free(cachedcosine);
+  if (cacheddistance) Z_Free(cacheddistance);
+  if (cachedxstep) Z_Free(cachedxstep);
+  if (cachedystep) Z_Free(cachedystep);
+  if (cachedcosdistance) Z_Free(cachedcosdistance);
+  if (cachedsindistance) Z_Free(cachedsindistance);
+  if (cachevalid) Z_Free(cachevalid);
+  if (cachemru) Z_Free(cachemru);
+#ifdef __vita__
+  if (vita_plane_row_div_magic) Z_Free(vita_plane_row_div_magic);
+#endif
 
   if (yslope) Z_Free(yslope);
   if (distscale) Z_Free(distscale);
@@ -131,7 +212,24 @@ void R_InitPlanesRes(void)
   ceilingclip = Z_Calloc(1, SCREENWIDTH * sizeof(*ceilingclip));
   spanstart = Z_Calloc(1, SCREENHEIGHT * sizeof(*spanstart));
 
-  cachedheight = Z_Calloc(1, SCREENHEIGHT * sizeof(*cachedheight));
+  cachedheight = Z_Calloc(1, SCREENHEIGHT * 2 * sizeof(*cachedheight));
+  cachedsine = Z_Calloc(1, SCREENHEIGHT * 2 * sizeof(*cachedsine));
+  cachedcosine = Z_Calloc(1, SCREENHEIGHT * 2 * sizeof(*cachedcosine));
+  cacheddistance = Z_Calloc(1, SCREENHEIGHT * 2 * sizeof(*cacheddistance));
+  cachedxstep = Z_Calloc(1, SCREENHEIGHT * 2 * sizeof(*cachedxstep));
+  cachedystep = Z_Calloc(1, SCREENHEIGHT * 2 * sizeof(*cachedystep));
+  cachedcosdistance = Z_Calloc(1, SCREENHEIGHT * 2 * sizeof(*cachedcosdistance));
+  cachedsindistance = Z_Calloc(1, SCREENHEIGHT * 2 * sizeof(*cachedsindistance));
+  cachevalid = Z_Calloc(1, SCREENHEIGHT * 2 * sizeof(*cachevalid));
+  cachemru = Z_Calloc(1, SCREENHEIGHT * sizeof(*cachemru));
+#ifdef __vita__
+  vita_plane_row_div_magic = Z_Calloc(
+    SCREENHEIGHT + 1,
+    sizeof(*vita_plane_row_div_magic)
+  );
+  for (i = 2; i <= SCREENHEIGHT; ++i)
+    vita_plane_row_div_magic[i] = UINT32_MAX / (uint32_t)i + 1u;
+#endif
 
   yslope = Z_Calloc(1, SCREENHEIGHT * sizeof(*yslope));
   distscale = Z_Calloc(1, SCREENWIDTH * sizeof(*distscale));
@@ -172,9 +270,21 @@ void dsda_RefreshLinearSky (void)
 
 static void R_MapPlane(int y, int x1, int x2, draw_span_vars_t *dsvars)
 {
-  int64_t den;
   fixed_t distance;
+  fixed_t base_xstep;
+  fixed_t base_ystep;
+  fixed_t cosdistance;
+  fixed_t sindistance;
   unsigned index;
+  int cache_index;
+  int cache_base;
+  int cache_way;
+#ifdef __vita__
+  unsigned int vita_map_start = 0;
+  unsigned int vita_span_start = 0;
+  unsigned int vita_span_us = 0;
+  const int vita_profile_sample = Vita_ProfileSampleActive();
+#endif
 
 #ifdef RANGECHECK
   if (x2 < x1 || x1<0 || x2>=viewwidth || (unsigned)y>(unsigned)viewheight)
@@ -192,21 +302,119 @@ static void R_MapPlane(int y, int x1, int x2, draw_span_vars_t *dsvars)
   // See cchest2.wad/map02/room with sector #265
   if (centery == y)
     return;
-  den = (int64_t)FRACUNIT * FRACUNIT * D_abs(centery - y);
-  distance = FixedMul(dsvars->planeheight, yslope[y]);
 
-  dsvars->xstep = (fixed_t)((int64_t)dsvars->sine * dsvars->planeheight * viewfocratio / den);
-  dsvars->ystep = (fixed_t)((int64_t)dsvars->cosine * dsvars->planeheight * viewfocratio / den);
+#ifdef __vita__
+  if (vita_profile_sample)
+    vita_map_start = Vita_ProfileTimestamp();
+#endif
+
+  /*
+   * Exact per-row plane-math cache.
+   *
+   * viewfocratio and yslope[y] are fixed for the frame. The remaining inputs
+   * to the expensive 64-bit divisions are planeheight and the effective
+   * sine/cosine (which include flat rotation). Scale, offsets and x1 are
+   * deliberately applied after the cached values, preserving DSDA's exact
+   * fixed-point operation order and supporting independently scaled/offset
+   * visplanes that share the same base projection.
+   */
+  cache_base = y << 1;
+  cache_way = cachemru[y] & 1;
+  cache_index = cache_base + cache_way;
+
+  if (!(cachevalid[cache_index] &&
+        cachedheight[cache_index] == dsvars->planeheight &&
+        cachedsine[cache_index] == dsvars->sine &&
+        cachedcosine[cache_index] == dsvars->cosine))
+  {
+    cache_way ^= 1;
+    cache_index = cache_base + cache_way;
+  }
+
+  if (cachevalid[cache_index] &&
+      cachedheight[cache_index] == dsvars->planeheight &&
+      cachedsine[cache_index] == dsvars->sine &&
+      cachedcosine[cache_index] == dsvars->cosine)
+  {
+    cachemru[y] = (byte)cache_way;
+    distance = cacheddistance[cache_index];
+    base_xstep = cachedxstep[cache_index];
+    base_ystep = cachedystep[cache_index];
+    cosdistance = cachedcosdistance[cache_index];
+    sindistance = cachedsindistance[cache_index];
+#ifdef __vita__
+    ++vita_profile_plane_cache_hits;
+#endif
+  }
+  else
+  {
+    const uint32_t row_distance = (uint32_t)D_abs(centery - y);
+#ifndef __vita__
+    const int64_t den =
+      (int64_t)FRACUNIT * FRACUNIT * row_distance;
+#endif
+
+    if (!cachevalid[cache_base])
+      cache_index = cache_base;
+    else if (!cachevalid[cache_base + 1])
+      cache_index = cache_base + 1;
+    else
+      cache_index = cache_base + ((cachemru[y] ^ 1) & 1);
+
+    distance = FixedMul(dsvars->planeheight, yslope[y]);
+#ifdef __vita__
+    base_xstep = (fixed_t)R_VitaPlaneDiv64Exact(
+      (int64_t)dsvars->sine * dsvars->planeheight * viewfocratio,
+      row_distance
+    );
+    base_ystep = (fixed_t)R_VitaPlaneDiv64Exact(
+      (int64_t)dsvars->cosine * dsvars->planeheight * viewfocratio,
+      row_distance
+    );
+#else
+    base_xstep =
+      (fixed_t)((int64_t)dsvars->sine * dsvars->planeheight *
+                viewfocratio / den);
+    base_ystep =
+      (fixed_t)((int64_t)dsvars->cosine * dsvars->planeheight *
+                viewfocratio / den);
+#endif
+    cosdistance = FixedMul(dsvars->cosine, distance);
+    sindistance = FixedMul(dsvars->sine, distance);
+
+    cachevalid[cache_index] = 1;
+    cachemru[y] = (byte)(cache_index - cache_base);
+    cachedheight[cache_index] = dsvars->planeheight;
+    cachedsine[cache_index] = dsvars->sine;
+    cachedcosine[cache_index] = dsvars->cosine;
+    cacheddistance[cache_index] = distance;
+    cachedxstep[cache_index] = base_xstep;
+    cachedystep[cache_index] = base_ystep;
+    cachedcosdistance[cache_index] = cosdistance;
+    cachedsindistance[cache_index] = sindistance;
+#ifdef __vita__
+    ++vita_profile_plane_cache_misses;
+#endif
+  }
+
+  dsvars->xstep = base_xstep;
+  dsvars->ystep = base_ystep;
 
   // killough 2/28/98: Add offsets
-  dsvars->xfrac = dsvars->xoffs + FixedMul(dsvars->cosine, distance) + (x1 - centerx) * dsvars->xstep;
-  dsvars->yfrac = dsvars->yoffs - FixedMul(dsvars->sine, distance) + (x1 - centerx) * dsvars->ystep;
+  dsvars->xfrac = dsvars->xoffs + cosdistance + (x1 - centerx) * dsvars->xstep;
+  dsvars->yfrac = dsvars->yoffs - sindistance + (x1 - centerx) * dsvars->ystep;
 
-  dsvars->xstep = FixedMul(dsvars->xstep, dsvars->xscale);
-  dsvars->ystep = FixedMul(dsvars->ystep, dsvars->yscale);
+  if (dsvars->xscale != FRACUNIT)
+  {
+    dsvars->xstep = FixedMul(dsvars->xstep, dsvars->xscale);
+    dsvars->xfrac = FixedMul(dsvars->xfrac, dsvars->xscale);
+  }
 
-  dsvars->xfrac = FixedMul(dsvars->xfrac, dsvars->xscale);
-  dsvars->yfrac = FixedMul(dsvars->yfrac, dsvars->yscale);
+  if (dsvars->yscale != FRACUNIT)
+  {
+    dsvars->ystep = FixedMul(dsvars->ystep, dsvars->yscale);
+    dsvars->yfrac = FixedMul(dsvars->yfrac, dsvars->yscale);
+  }
 
   if (!(dsvars->colormap = fixedcolormap))
   {
@@ -226,7 +434,27 @@ static void R_MapPlane(int y, int x1, int x2, draw_span_vars_t *dsvars)
   dsvars->x2 = x2;
 
   if (V_IsSoftwareMode())
+  {
+#ifdef __vita__
+    if (vita_profile_sample)
+      vita_span_start = Vita_ProfileTimestamp();
+#endif
     R_DrawSpan(dsvars);
+#ifdef __vita__
+    if (vita_profile_sample)
+      vita_span_us =
+        (unsigned int)(Vita_ProfileTimestamp() - vita_span_start);
+#endif
+  }
+
+#ifdef __vita__
+  if (vita_profile_sample)
+    Vita_ProfilePlaneMap(
+      (unsigned int)(Vita_ProfileTimestamp() - vita_map_start),
+      vita_span_us,
+      (unsigned int)(x2 - x1 + 1)
+    );
+#endif
 }
 
 //
@@ -249,7 +477,7 @@ void R_ClearPlanes(void)
   lastopening = openings;
 
   // texture calculation
-  memset (cachedheight, 0, SCREENHEIGHT * sizeof(*cachedheight));
+  memset(cachevalid, 0, SCREENHEIGHT * 2 * sizeof(*cachevalid));
 }
 
 // New function, by Lee Killough

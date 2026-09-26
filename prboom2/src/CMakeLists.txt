@@ -61,8 +61,6 @@ set(COMMON_SRC
     dsda/gameinfo.h
     dsda/ghost.c
     dsda/ghost.h
-    dsda/gl/render_scale.c
-    dsda/gl/render_scale.h
     dsda/global.c
     dsda/global.h
     dsda/hud_components.h
@@ -317,7 +315,6 @@ set(COMMON_SRC
     hu_stuff.h
     info.c
     info.h
-    i_capture.c
     i_capture.h
     i_glob.c
     i_glob.h
@@ -442,6 +439,12 @@ else()
     set(WAD_SRC w_memcache.c)
 endif()
 
+if(VITA)
+    set(CAPTURE_SRC vita/vita_capture.c)
+else()
+    set(CAPTURE_SRC i_capture.c)
+endif()
+
 set(MUS2MID_SRC
     memio.c
     memio.h
@@ -494,6 +497,7 @@ set(DSDA_SOURCES
     ${COMMON_SRC}
     ${NET_CLIENT_SRC}
     ${WAD_SRC}
+    ${CAPTURE_SRC}
     ${MUS2MID_SRC}
     ${SDLDOOM_SOURCES}
     ${DOOMMUSIC_SOURCES}
@@ -501,27 +505,42 @@ set(DSDA_SOURCES
 )
 
 function(AddGameExecutable TARGET SOURCES)
-    set(SOURCES
-        ${SOURCES}
-        gl_clipper.c
-        gl_drawinfo.c
-        gl_fbo.c
-        gl_intern.h
-        gl_light.c
-        gl_main.c
-        gl_map.c
-        gl_missingtexture.c
-        gl_opengl.c
-        gl_opengl.h
-        gl_preprocess.c
-        gl_progress.c
-        gl_shader.c
-        gl_sky.c
-        gl_struct.h
-        gl_texture.c
-        gl_vertex.c
-        gl_wipe.c
-    )
+    if(DSDA_ENABLE_OPENGL_RENDERER)
+        list(APPEND SOURCES
+            dsda/gl/render_scale.c
+            dsda/gl/render_scale.h
+            gl_clipper.c
+            gl_drawinfo.c
+            gl_fbo.c
+            gl_intern.h
+            gl_light.c
+            gl_main.c
+            gl_map.c
+            gl_missingtexture.c
+            gl_opengl.c
+            gl_opengl.h
+            gl_preprocess.c
+            gl_progress.c
+            gl_shader.c
+            gl_sky.c
+            gl_struct.h
+            gl_texture.c
+            gl_vertex.c
+            gl_wipe.c
+        )
+    endif()
+
+    if(VITA)
+        list(APPEND SOURCES
+            vita/vita_system.c
+            vita/vita_system.h
+            vita/vita_gl_stubs.c
+            vita/vita_video.c
+            vita/vita_video.h
+            vita/vita_launcher.c
+            vita/vita_launcher.h
+        )
+    endif()
 
     if(WIN32)
         set(SOURCES
@@ -559,10 +578,54 @@ function(AddGameExecutable TARGET SOURCES)
         dsda::dependencies
     )
 
-    set_target_properties(${TARGET} PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY ${DSDA_OUTPUT_PATH}
-        C_STANDARD 99
-    )
+    if(VITA)
+        set_property(TARGET ${TARGET}
+            PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
+        )
+
+        target_compile_definitions(${TARGET}
+            PRIVATE
+            VITA_DISPLAY_WIDTH=${VITA_DISPLAY_WIDTH}
+            VITA_DISPLAY_HEIGHT=${VITA_DISPLAY_HEIGHT}
+            VITA_SOFTWARE_WIDTH=${VITA_SOFTWARE_WIDTH}
+            VITA_SOFTWARE_HEIGHT=${VITA_SOFTWARE_HEIGHT}
+        )
+
+        target_compile_options(${TARGET}
+            PRIVATE
+            -O3
+            -mtune=cortex-a9
+            -mfpu=neon
+            -fsigned-char
+        )
+
+        # vita-elf-create appends SCE module/import data after the first
+        # PT_LOAD segment. Keep executable/read-only data separate from writable
+        # data, then align LOAD segments on a 64 KiB page. This guarantees a
+        # stable gap for SCE metadata instead of relying on the code size modulo
+        # the linker's default 4 KiB page.
+        target_link_options(${TARGET}
+            PRIVATE
+            -Wl,-q
+            -Wl,-z,separate-code
+            -Wl,-z,max-page-size=0x10000
+        )
+    endif()
+
+    if(VITA)
+        # vita_create_self()/vita_create_vpk() operate in this CMake
+        # subdirectory. Keep the ELF beside their VELF/SELF outputs so Ninja
+        # can resolve the generated dependency graph correctly.
+        set_target_properties(${TARGET} PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+            C_STANDARD 99
+        )
+    else()
+        set_target_properties(${TARGET} PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY ${DSDA_OUTPUT_PATH}
+            C_STANDARD 99
+        )
+    endif()
 
     add_dependencies(${TARGET} dsda-doom-wad)
     add_custom_command(TARGET ${TARGET}
@@ -570,6 +633,15 @@ function(AddGameExecutable TARGET SOURCES)
         COMMAND ${CMAKE_COMMAND} -E echo "Copying ${WAD_DATA_PATH} to $<TARGET_FILE_DIR:dsda-doom>"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different ${WAD_DATA_PATH} $<TARGET_FILE_DIR:dsda-doom>
     )
+
+    if(VITA)
+        vita_create_self(eboot.bin ${TARGET})
+        vita_create_vpk(vita-dsda-doom.vpk ${VITA_TITLEID} eboot.bin
+            VERSION ${VITA_VERSION}
+            NAME ${VITA_APP_NAME}
+            FILE ${WAD_DATA_PATH} dsda-doom.wad
+        )
+    endif()
 
     if(MSVC)
         set_target_properties(${TARGET} PROPERTIES

@@ -121,6 +121,10 @@
 
 #include "i_glob.h"
 
+#ifdef __vita__
+#include "vita/vita_system.h"
+#endif
+
 static void D_PageDrawer(void);
 
 char* iwadlump;
@@ -1209,6 +1213,16 @@ static char *FindIWADFile(void)
   }
   else
   {
+#ifdef __vita__
+    /*
+     * No launcher yet: deterministically pick the first WAD from
+     * ux0 -> uma0 -> ur0. An explicit -iwad always wins above.
+     */
+    iwad = Vita_FindAutoIWAD();
+    if (iwad)
+      return iwad;
+#endif
+
     if (dsda_Flag(dsda_arg_heretic))
       return I_FindWad("heretic.wad");
     else if (dsda_Flag(dsda_arg_hexen))

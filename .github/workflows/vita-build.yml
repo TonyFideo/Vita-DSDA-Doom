@@ -1,0 +1,134 @@
+name: Vita build
+
+on:
+  push:
+    branches:
+      - vita-base
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vita-dsda-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  build-vita:
+    name: VitaSDK software renderer
+    runs-on: ubuntu-latest
+    container:
+      image: vitasdk/vitasdk:latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install host tools
+        shell: bash
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential cmake git ninja-build pkg-config ca-certificates
+
+      - name: Install Vita dependencies
+        shell: bash
+        run: |
+          set -eux
+
+          if command -v vdpm >/dev/null 2>&1; then
+            VDPM=vdpm
+          else
+            git clone --depth 1 https://github.com/vitasdk/vdpm.git /tmp/vdpm
+            VDPM=/tmp/vdpm/vdpm
+          fi
+
+          export VDPM_NONINTERACTIVE=1
+
+          # The VitaSDK container currently ships sdl2_vitagl by default.
+          # This port owns the VitaGL context itself, so use regular SDL2 for
+          # input/audio/surfaces and remove the mutually-exclusive package.
+          if "$VDPM" pacman -- -Q sdl2_vitagl >/dev/null 2>&1; then
+            # Replace the provider without recursively removing packages that
+            # depend on the virtual "sdl2" capability. Standard SDL2 is
+            # installed immediately below, restoring that dependency.
+            "$VDPM" pacman -- -Rdd --noconfirm sdl2_vitagl
+          fi
+
+          # libzip in the VitaSDK repository is built against the legacy
+          # OpenSSL 1.0 API (EVP_CIPHER_CTX_cleanup/HMAC_CTX_*). The current
+          # container may instead preload openssl-1.1.1, which satisfies the
+          # package dependency but cannot resolve those symbols at link time.
+          # Install the ABI that the packaged libzip was actually built for.
+          if "$VDPM" pacman -- -Q openssl-1.1.1 >/dev/null 2>&1; then
+            "$VDPM" pacman -- -Rdd --noconfirm openssl-1.1.1
+          fi
+
+          "$VDPM" install \
+            openssl \
+            zlib \
+            sdl2 \
+            sdl2_mixer \
+            libsndfile \
+            libzip \
+            vitaShaRK \
+            SceShaccCgExt \
+            taihen \
+            libmathneon
+
+      - name: Build pinned VitaGL
+        shell: bash
+        run: |
+          set -eux
+          git clone https://github.com/Rinnegatamante/vitaGL.git /tmp/vitaGL
+          cd /tmp/vitaGL
+          git checkout cd3791e29ff7f1c0ab349f12c7231f4871ce6a75
+          make \
+            ENABLE_LEGACY_PIPELINE=1 \
+            NO_SPLASHSCREEN=1 \
+            -j"$(nproc)"
+          make install
+
+      - name: Configure
+        shell: bash
+        run: |
+          cmake -S prboom2 -B build-vita -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DDSDA_ENABLE_OPENGL_RENDERER=OFF \
+            -DDSDA_VITA_PRESENT_VITAGL=ON \
+            -DWITH_IMAGE=OFF \
+            -DWITH_MAD=OFF \
+            -DWITH_FLUIDSYNTH=OFF \
+            -DWITH_PORTMIDI=OFF \
+            -DWITH_VORBISFILE=OFF \
+            -DWITH_XMP=OFF
+
+      - name: Build
+        shell: bash
+        run: cmake --build build-vita --parallel
+
+      - name: Collect artifacts
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p dist
+          for file in \
+            build-vita/src/vita-dsda-doom.vpk \
+            build-vita/src/eboot.bin \
+            build-vita/src/dsda-doom \
+            build-vita/dsda-doom.wad \
+            build-vita/CMakeCache.txt
+          do
+            if [ -f "$file" ]; then
+              cp "$file" dist/
+            fi
+          done
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vita-dsda-doom-${{ github.sha }}
+          path: dist/
+          if-no-files-found: warn

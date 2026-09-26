@@ -16,7 +16,11 @@
 //
 
 #include "SDL.h"
+#ifdef __vita__
+#include <vitaGL.h>
+#else
 #include "SDL_opengl.h"
+#endif
 
 #include <ctype.h>
 #include <stdio.h>

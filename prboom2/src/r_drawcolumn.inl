@@ -105,6 +105,20 @@ static void R_DRAWCOLUMN_FUNCNAME(draw_column_vars_t *dcvars)
     frac = dcvars->texturemid + (dcvars->yl-centery)*fracstep;
 #endif
 
+#ifdef __vita__
+#if (R_DRAWCOLUMN_PIPELINE == RDC_STANDARD)
+  if (R_VitaTryQueueFused4(dcvars, frac, fracstep))
+    return;
+#else
+  /* A different pipeline cannot share the deferred opaque wall batch. */
+  if (vita_fused4_pending)
+  {
+    vita_fused4_flush_reason = VITA_WALL_FUSED_FALLBACK_OTHER;
+    R_FlushColumns();
+  }
+#endif
+#endif
+
   // Framebuffer destination address.
    // SoM: MAGIC
    {
@@ -181,6 +195,25 @@ static void R_DRAWCOLUMN_FUNCNAME(draw_column_vars_t *dcvars)
       }
     } else if (dcvars->texheight == 128) {
       #define FIXEDT_128MASK ((127<<FRACBITS)|0xffff)
+#ifdef __vita__
+      /*
+       * 128-high wall textures are extremely common in Doom. Keep the exact
+       * scalar fixed-point progression and palette lookups, but amortize loop
+       * control and destination pointer updates across four pixels.
+       */
+      while (count >= 4) {
+        dest[0] = GETCOL(frac & FIXEDT_128MASK);
+        frac += fracstep;
+        dest[4] = GETCOL(frac & FIXEDT_128MASK);
+        frac += fracstep;
+        dest[8] = GETCOL(frac & FIXEDT_128MASK);
+        frac += fracstep;
+        dest[12] = GETCOL(frac & FIXEDT_128MASK);
+        frac += fracstep;
+        dest += 16;
+        count -= 4;
+      }
+#endif
       while(count--) {
         *dest = GETCOL(frac & FIXEDT_128MASK);
         dest += 4;

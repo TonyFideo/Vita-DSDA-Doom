@@ -68,11 +68,51 @@ int SlopeDiv(unsigned int num, unsigned int den)
 // [crispy] catch SlopeDiv overflows, only used in rendering
 int SlopeDivEx(unsigned int num, unsigned int den)
 {
+#ifdef __vita__
+  uint32_t divisor;
+  uint64_t numerator;
+  uint32_t ans;
+  uint64_t product;
+  double numerator_d;
+
+  if (den < 512)
+    return SLOPERANGE;
+
+  divisor = den >> 8;
+  numerator = (uint64_t)num << 3;
+
+  /*
+   * The caller only needs 0..SLOPERANGE.  Reject saturated results before
+   * dividing, then use the Cortex-A9 VFP divider for the small quotient and
+   * correct it with exact integer products.  This preserves the original
+   * floor division bit-for-bit without calling __aeabi_uldivmod.
+   */
+  if (numerator >= (uint64_t)divisor * (SLOPERANGE + 1u))
+    return SLOPERANGE;
+
+  numerator_d =
+    (double)(uint32_t)(numerator >> 32) * 4294967296.0 +
+    (double)(uint32_t)numerator;
+  ans = (uint32_t)(numerator_d / (double)divisor);
+  product = (uint64_t)ans * divisor;
+
+  if (product > numerator)
+  {
+    --ans;
+  }
+  else if ((uint64_t)(ans + 1u) * divisor <= numerator)
+  {
+    ++ans;
+  }
+
+  return ans <= SLOPERANGE ? (int)ans : SLOPERANGE;
+#else
   uint64_t ans;
   if (den < 512)
     return SLOPERANGE;
   ans = ((uint64_t)num<<3)/(den>>8);
   return ans <= SLOPERANGE ? (int)ans : SLOPERANGE;
+#endif
 }
 
 fixed_t finetangent[4096];

@@ -1,0 +1,18 @@
+#ifndef DSDA_VITA_VIDEO_H
+#define DSDA_VITA_VIDEO_H
+
+int Vita_VideoInit(void);
+void Vita_VideoShutdown(void);
+void Vita_VideoSetVSync(int enabled);
+
+int Vita_VideoResize(int width, int height);
+void Vita_VideoSetPalette(const void *rgba_palette);
+void *Vita_VideoRenderBuffer(void);
+int Vita_VideoRenderPitch(void);
+void Vita_VideoPresent(int width, int height);
+
+int Vita_VideoInternalWidth(void);
+int Vita_VideoInternalHeight(void);
+void Vita_VideoSetInternalResolution(int width, int height);
+
+#endif

@@ -39,7 +39,9 @@
 #include <math.h>
 #include <float.h>
 
+#ifdef DSDA_ENABLE_OPENGL_RENDERER
 #include "gl_opengl.h"
+#endif
 #include "doomstat.h"
 #include "st_stuff.h"
 #include "r_main.h"

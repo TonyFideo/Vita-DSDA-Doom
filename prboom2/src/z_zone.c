@@ -55,6 +55,10 @@
 #include "g_game.h"
 #include "lprintf.h"
 
+#ifdef __vita__
+#include "vita/vita_system.h"
+#endif
+
 #ifdef DJGPP
 #include <dpmi.h>
 #endif
@@ -77,6 +81,8 @@ typedef struct memblock {
 static const size_t HEADER_SIZE = sizeof(memblock_t);
 
 static memblock_t *blockbytag[ZONE_MAX];
+static size_t zone_bytes[ZONE_MAX];
+static size_t zone_peak_bytes;
 
 /* Z_Malloc
  * cph - the algorithm here was a very simple first-fit round-robin
@@ -97,6 +103,16 @@ static void *Z_MallocTag(size_t size, int tag)
 
   if (!(block = malloc(size + HEADER_SIZE)))
   {
+#ifdef __vita__
+    Vita_Log(
+      "[VITA] Z_Malloc OOM: request=%lu static=%lu level=%lu total=%lu peak=%lu\n",
+      (unsigned long)size,
+      (unsigned long)zone_bytes[ZONE_STATIC],
+      (unsigned long)zone_bytes[ZONE_LEVEL],
+      (unsigned long)(zone_bytes[ZONE_STATIC] + zone_bytes[ZONE_LEVEL]),
+      (unsigned long)zone_peak_bytes
+    );
+#endif
     I_Error ("Z_Malloc: Failure trying to allocate %lu bytes", (unsigned long) size);
   }
 
@@ -116,6 +132,14 @@ static void *Z_MallocTag(size_t size, int tag)
   block->size = size;
   block->signature = ZONE_SIGNATURE;
   block->tag = tag;           // tag
+
+  zone_bytes[tag] += size;
+  {
+    const size_t total = zone_bytes[ZONE_STATIC] + zone_bytes[ZONE_LEVEL];
+    if (total > zone_peak_bytes)
+      zone_peak_bytes = total;
+  }
+
   block = (memblock_t *)((char *) block + HEADER_SIZE);
 
   return block;
@@ -131,6 +155,11 @@ void Z_Free(void *p)
   if (block->signature != ZONE_SIGNATURE)
     I_Error("Z_Free: freed a non-zone pointer");
   block->signature = 0;       // Nullify signature so another free fails
+
+  if (zone_bytes[block->tag] >= block->size)
+    zone_bytes[block->tag] -= block->size;
+  else
+    zone_bytes[block->tag] = 0;
 
   if (block == block->next)
     blockbytag[block->tag] = NULL;

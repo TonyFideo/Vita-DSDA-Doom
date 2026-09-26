@@ -53,7 +53,9 @@ enum draw_filter_type_e {
 
 typedef enum
 {
-  DRAW_COLUMN_ISPATCH = 0x00000001
+  DRAW_COLUMN_ISPATCH = 0x00000001,
+  /* Vita software walls may defer four opaque columns into a fused kernel. */
+  DRAW_COLUMN_VITA_FUSED4 = 0x00000002
 } draw_column_flags_e;
 
 typedef struct draw_column_vars_s* pdraw_column_vars_s;
@@ -143,6 +145,11 @@ void R_DrawViewBorder(void);
 // which gets rid of the unnecessary reset of various variables during
 // column drawing.
 void R_ResetColumnBuffer(void);
+
+#ifdef __vita__
+/* Keep deferred fused wall work inside the BSP profiling phase. */
+void R_VitaFlushDeferredWallColumns(void);
+#endif
 
 void R_SetFuzzPos(int fuzzpos);
 int R_GetFuzzPos();

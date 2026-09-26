@@ -44,7 +44,9 @@
 #include <direct.h>
 #include <winreg.h>
 #endif
+#ifdef DSDA_ENABLE_OPENGL_RENDERER
 #include <SDL_opengl.h>
+#endif
 #include <string.h>
 #include <math.h>
 
@@ -82,7 +84,9 @@
 #include "dsda.h"
 #include "dsda/settings.h"
 #include "gl_struct.h"
+#ifdef DSDA_ENABLE_OPENGL_RENDERER
 #include "gl_intern.h"
+#endif
 #include "g_game.h"
 #include "d_deh.h"
 #include "e6y.h"

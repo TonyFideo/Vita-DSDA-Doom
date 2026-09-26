@@ -58,6 +58,226 @@
 #include "dsda/map_format.h"
 #include "dsda/render_stats.h"
 
+#ifdef __vita__
+#include "vita/vita_system.h"
+
+/*
+ * Cortex-A9 has no integer divide instruction. GCC therefore lowers the hot
+ * renderer divisions to __aeabi_*div helpers. Use VFP double division as the
+ * estimate for quotients known to fit in 32 bits, then correct the estimate
+ * with exact integer products. IEEE-754 double has enough precision that the
+ * estimate can differ by at most one for a 32-bit quotient; the correction
+ * keeps the renderer bit-exact.
+ */
+static inline uint32_t R_VitaUDiv32Exact(uint32_t num, uint32_t den)
+{
+  uint32_t q;
+  uint64_t product;
+
+  if (!den)
+    return UINT32_MAX;
+
+  q = (uint32_t)((double)num / (double)den);
+  product = (uint64_t)q * den;
+
+  if (product > num)
+  {
+    --q;
+  }
+  else if (q != UINT32_MAX && product + den <= num)
+  {
+    ++q;
+  }
+
+  return q;
+}
+
+/*
+ * Exact UINT32_MAX / rw_scale for the wall hot loop. R_ScaleFromGlobalAngle
+ * clamps rw_scale to [256, 0x08000000]. Normalize the divisor to Q1.31, seed
+ * a Q31 reciprocal from a 128-byte table, perform two Newton steps, then
+ * correct the quotient by an exact integer product. This removes both the
+ * libgcc integer divider and VFP divide from the per-column path.
+ */
+static const uint16_t vita_recip_seed_q15[64] = {
+  32513, 32017, 31536, 31068, 30615, 30174, 29746, 29330,
+  28926, 28532, 28149, 27776, 27413, 27060, 26715, 26379,
+  26051, 25731, 25420, 25115, 24818, 24528, 24244, 23967,
+  23696, 23431, 23172, 22919, 22671, 22429, 22192, 21959,
+  21732, 21509, 21290, 21076, 20867, 20661, 20460, 20262,
+  20068, 19878, 19691, 19508, 19328, 19152, 18978, 18808,
+  18641, 18477, 18315, 18157, 18001, 17848, 17697, 17549,
+  17403, 17260, 17119, 16980, 16844, 16710, 16578, 16448
+};
+
+static inline uint32_t R_VitaWallIScaleExact(uint32_t den)
+{
+  uint32_t shift;
+  uint32_t x;
+  uint32_t index;
+  uint64_t y;
+  uint64_t xy;
+  uint64_t error;
+  uint32_t q;
+  uint64_t product;
+  int i;
+
+  if (den < 256u || den > 0x08000000u)
+    return R_VitaUDiv32Exact(UINT32_MAX, den);
+
+  shift = (uint32_t)__builtin_clz(den);
+  x = den << shift;
+  index = (x >> 25) - 64u;
+  y = (uint64_t)vita_recip_seed_q15[index] << 16;
+
+  for (i = 0; i < 2; ++i)
+  {
+    xy = ((uint64_t)x * y) >> 31;
+    error = (UINT64_C(1) << 32) - xy;
+    y = (y * error) >> 31;
+  }
+
+  q = (uint32_t)(y >> (30u - shift));
+  product = (uint64_t)q * den;
+
+  if (product > UINT32_MAX)
+  {
+    --q;
+  }
+  else if (product <= (uint64_t)UINT32_MAX - den)
+  {
+    ++q;
+  }
+
+  return q;
+}
+
+static inline int64_t R_VitaSDiv64ByU32Exact(int64_t num, uint32_t den)
+{
+  const int negative = num < 0;
+  const uint64_t magnitude = negative
+    ? 0u - (uint64_t)num
+    : (uint64_t)num;
+  const uint64_t max_fast = (uint64_t)UINT32_MAX * den;
+  uint32_t q;
+  uint64_t product;
+  double magnitude_d;
+
+  if (!den)
+    return num < 0 ? INT64_MIN : INT64_MAX;
+
+  /* Extreme long-wall cases keep the original exact integer path. */
+  if (magnitude > max_fast)
+    return num / (int64_t)den;
+
+  /* Build the double from 32-bit halves so ARM can use VFP conversions. */
+  magnitude_d =
+    (double)(uint32_t)(magnitude >> 32) * 4294967296.0 +
+    (double)(uint32_t)magnitude;
+
+  q = (uint32_t)(magnitude_d / (double)den);
+  product = (uint64_t)q * den;
+
+  if (product > magnitude)
+  {
+    --q;
+  }
+  else if (q != UINT32_MAX && product + den <= magnitude)
+  {
+    ++q;
+  }
+
+  return negative ? -(int64_t)q : (int64_t)q;
+}
+
+static inline fixed_t R_VitaFixedDivExact(fixed_t a, fixed_t b)
+{
+  uint32_t den;
+  int64_t num;
+
+  if ((D_abs(a) >> 14) >= D_abs(b))
+    return ((a ^ b) >> 31) ^ INT_MAX;
+
+  den = b < 0 ? 0u - (uint32_t)b : (uint32_t)b;
+  num = (int64_t)a * FRACUNIT;
+  if (b < 0)
+    num = -num;
+
+  return (fixed_t)R_VitaSDiv64ByU32Exact(num, den);
+}
+
+/*
+ * R_GetTextureColumn is cross-TU and contains generic negative/non-POT wrap
+ * handling. Doom wall textures are overwhelmingly power-of-two wide, where
+ * unsigned masking is the exact modulo operation even for negative columns.
+ */
+static inline const byte *R_VitaTextureColumn(
+  const rpatch_t *patch,
+  int column
+)
+{
+  const unsigned int mask = patch->widthmask;
+
+  if (mask + 1u == (unsigned int)patch->width)
+    return patch->columns[(unsigned int)column & mask].pixels;
+
+  return R_GetTextureColumn(patch, column);
+}
+
+static inline const rcolumn_t *R_VitaPatchColumnWrapped(
+  const rpatch_t *patch,
+  int column
+)
+{
+  const unsigned int mask = patch->widthmask;
+
+  /* Unsigned masking is exact modulo 2^n, including negative columns. */
+  if (mask + 1u == (unsigned int)patch->width)
+    return &patch->columns[(unsigned int)column & mask];
+
+  return R_GetPatchColumnWrapped(patch, column);
+}
+
+/*
+ * Exact reciprocal for the wall-light bucket calculation. The Q32 reciprocal
+ * is rounded down, so the per-column estimate is exact or one bucket low;
+ * one integer comparison corrects it. Rebuilt only when the view geometry
+ * changes, never per column.
+ */
+static int vita_light_wide_centerx = -1;
+static uint32_t vita_light_den;
+static uint32_t vita_light_magic;
+static uint32_t vita_light_saturation;
+
+static void R_VitaPrepareWallLightScale(void)
+{
+  if (vita_light_wide_centerx == wide_centerx)
+    return;
+
+  vita_light_wide_centerx = wide_centerx;
+  vita_light_den = (uint32_t)wide_centerx << 7;
+  vita_light_magic = vita_light_den
+    ? UINT32_MAX / vita_light_den + 1u
+    : 0;
+  vita_light_saturation = vita_light_den * MAXLIGHTSCALE;
+}
+
+static inline int R_VitaWallLightIndex(fixed_t scale)
+{
+  const uint32_t numerator = (uint32_t)scale * 5u;
+  uint32_t index;
+
+  if (numerator >= vita_light_saturation)
+    return MAXLIGHTSCALE - 1;
+
+  index = (uint32_t)(((uint64_t)numerator * vita_light_magic) >> 32);
+  if (index * vita_light_den > numerator)
+    --index;
+
+  return (int)index;
+}
+#endif
+
 // OPTIMIZE: closed two sided lines as single sided
 
 // killough 1/6/98: replaced globals with statics where appropriate
@@ -83,6 +303,9 @@ const lighttable_t    **walllights;
 //
 static int      rw_x;
 static int      rw_stopx;
+#ifdef __vita__
+static dboolean rw_clipsolid;
+#endif
 static angle_t  rw_centerangle;
 static fixed_t  rw_offset;
 static fixed_t  rw_scale;
@@ -217,7 +440,11 @@ static fixed_t R_ScaleFromGlobalAngle(angle_t visangle)
 
   if (den > (num >> 16))
   {
+#ifdef __vita__
+    scale = R_VitaFixedDivExact(num, den);
+#else
     scale = FixedDiv(num, den);
+#endif
 
     // [kb] use R_WiggleFix clamp
     if (scale > max_rwscale)
@@ -368,6 +595,11 @@ void R_RenderMaskedSegRange(drawseg_t *ds, int x1, int x2)
   const rpatch_t *patch;
   R_DrawColumn_f colfunc;
   draw_column_vars_t dcvars;
+#ifdef __vita__
+  int vita_patch_nonpot = 0;
+  int vita_profile_sample = 0;
+  unsigned int vita_nonpot_columns = 0;
+#endif
 
   R_SetDefaultDrawColumnVars(&dcvars);
 
@@ -424,13 +656,26 @@ void R_RenderMaskedSegRange(drawseg_t *ds, int x1, int x2)
 
   patch = R_TextureCompositePatchByNum(texnum);
 
+#ifdef __vita__
+  vita_patch_nonpot =
+    patch->widthmask + 1u != (unsigned int)patch->width;
+  vita_profile_sample = Vita_ProfileSampleActive();
+  R_VitaPrepareWallLightScale();
+#endif
+
   // draw the columns
   for (dcvars.x = x1 ; dcvars.x <= x2 ; dcvars.x++, spryscale += rw_scalestep)
     if (maskedtexturecol[dcvars.x] != INT_MAX) // dropoff overflow
       {
         fixed_t texturecolumn;
 
+#ifdef __vita__
+        dcvars.colormap = fixedcolormap
+          ? fixedcolormap
+          : walllights[R_VitaWallLightIndex(spryscale)];
+#else
         R_ApplyLightColormap(&dcvars, spryscale);
+#endif
 
         // killough 3/2/98:
         //
@@ -451,7 +696,11 @@ void R_RenderMaskedSegRange(drawseg_t *ds, int x1, int x2)
           sprtopscreen = (int64_t)(t >> FRACBITS); // R_WiggleFix
         }
 
+#ifdef __vita__
+        dcvars.iscale = (fixed_t)R_VitaWallIScaleExact((uint32_t)spryscale);
+#else
         dcvars.iscale = 0xffffffffu / (unsigned) spryscale;
+#endif
 
         texturecolumn = maskedtexturecol[dcvars.x] +
                         (curline->sidedef->textureoffset_mid >> FRACBITS);
@@ -465,6 +714,24 @@ void R_RenderMaskedSegRange(drawseg_t *ds, int x1, int x2)
         // when forming multipatched textures (see r_data.c).
 
         // draw the texture
+#ifdef __vita__
+        {
+          const rcolumn_t *column =
+            R_VitaPatchColumnWrapped(patch, texturecolumn);
+
+          if (vita_patch_nonpot && vita_profile_sample)
+            ++vita_nonpot_columns;
+
+          R_DrawMaskedColumn(
+            patch,
+            colfunc,
+            &dcvars,
+            column,
+            column,
+            column
+          );
+        }
+#else
         R_DrawMaskedColumn(
           patch,
           colfunc,
@@ -473,9 +740,14 @@ void R_RenderMaskedSegRange(drawseg_t *ds, int x1, int x2)
           R_GetPatchColumnWrapped(patch, texturecolumn-1),
           R_GetPatchColumnWrapped(patch, texturecolumn+1)
         );
+#endif
 
         maskedtexturecol[dcvars.x] = INT_MAX; // dropoff overflow
       }
+
+#ifdef __vita__
+  Vita_ProfileMaskedNonPotColumns(vita_nonpot_columns);
+#endif
 
   curline = NULL; /* cph 2001/11/18 - must clear curline now we're done with it, so R_ColourMap doesn't try using it for other things */
 }
@@ -496,8 +768,38 @@ static void R_RenderSegLoop (void)
   draw_column_vars_t dcvars;
   fixed_t texturecolumn = 0;
   fixed_t specific_texturecolumn = 0;
+#ifdef __vita__
+  unsigned int vita_wall_start = 0;
+  int vita_light_index = 0;
+  /*
+   * Wall texture ids are constant for the whole seg. Resolve their composite
+   * patches once instead of repeating the lazy-cache lookup for every screen
+   * column. The point-filter column drawer only consumes dcvars.source, so the
+   * neighbouring-column lookups used by older filtering paths are unnecessary
+   * on Vita as well.
+   */
+  const rpatch_t *mid_patch = NULL;
+  const rpatch_t *top_patch = NULL;
+  const rpatch_t *bottom_patch = NULL;
+  const lighttable_t **mid_walllights = NULL;
+  const lighttable_t **top_walllights = NULL;
+  const lighttable_t **bottom_walllights = NULL;
+#endif
+
+#ifdef __vita__
+  if (Vita_ProfileWallDeepActive())
+  {
+    vita_wall_start = Vita_ProfileTimestamp();
+    Vita_ProfileWallSegLoopCall();
+  }
+
+  R_VitaPrepareWallLightScale();
+#endif
 
   R_SetDefaultDrawColumnVars(&dcvars);
+#ifdef __vita__
+  dcvars.flags |= DRAW_COLUMN_VITA_FUSED4;
+#endif
 
   dsda_RecordDrawSeg();
 
@@ -557,7 +859,13 @@ static void R_RenderSegLoop (void)
       texturecolumn >>= FRACBITS;
 
       dcvars.x = rw_x;
+#ifdef __vita__
+      dcvars.iscale = (fixed_t)R_VitaWallIScaleExact((uint32_t)rw_scale);
+      if (!fixedcolormap)
+        vita_light_index = R_VitaWallLightIndex(rw_scale);
+#else
       dcvars.iscale = 0xffffffffu / (unsigned)rw_scale;
+#endif
     }
 
     // draw the wall tiers
@@ -569,14 +877,42 @@ static void R_RenderSegLoop (void)
       dcvars.yl = yl;     // single sided line
       dcvars.yh = yh;
       dcvars.texturemid = rw_midtexturemid;
+#ifdef __vita__
+      if (!mid_patch)
+        mid_patch = R_TextureCompositePatchByNum(midtexture);
+      if (!fixedcolormap && !mid_walllights)
+        mid_walllights = GetLightTable(
+          R_MidLightLevel(curline->sidedef, rw_lightlevel)
+        );
+      tex_patch = mid_patch;
+#else
       tex_patch = R_TextureCompositePatchByNum(midtexture);
+#endif
+#ifdef __vita__
+      dcvars.source = R_VitaTextureColumn(tex_patch, specific_texturecolumn);
+#else
       dcvars.source = R_GetTextureColumn(tex_patch, specific_texturecolumn);
+#endif
+#ifndef __vita__
       dcvars.prevsource = R_GetTextureColumn(tex_patch, specific_texturecolumn-1);
       dcvars.nextsource = R_GetTextureColumn(tex_patch, specific_texturecolumn+1);
+#endif
       dcvars.texheight = midtexheight;
+#ifdef __vita__
+      dcvars.colormap = fixedcolormap
+        ? fixedcolormap
+        : mid_walllights[vita_light_index];
+#else
       if (!fixedcolormap)
         R_ApplyMidLight(curline->sidedef);
       R_ApplyLightColormap(&dcvars, rw_scale);
+#endif
+#ifdef __vita__
+      if (Vita_ProfileWallDeepActive())
+        Vita_ProfileWallColumn(
+          dcvars.yh >= dcvars.yl ? (unsigned int)(dcvars.yh - dcvars.yl + 1) : 0
+        );
+#endif
       colfunc(&dcvars);
       tex_patch = NULL;
       ceilingclip[rw_x] = viewheight;
@@ -602,14 +938,42 @@ static void R_RenderSegLoop (void)
           dcvars.yl = yl;
           dcvars.yh = mid;
           dcvars.texturemid = rw_toptexturemid;
+#ifdef __vita__
+          if (!top_patch)
+            top_patch = R_TextureCompositePatchByNum(toptexture);
+          if (!fixedcolormap && !top_walllights)
+            top_walllights = GetLightTable(
+              R_TopLightLevel(curline->sidedef, rw_lightlevel)
+            );
+          tex_patch = top_patch;
+#else
           tex_patch = R_TextureCompositePatchByNum(toptexture);
+#endif
+#ifdef __vita__
+          dcvars.source = R_VitaTextureColumn(tex_patch, specific_texturecolumn);
+#else
           dcvars.source = R_GetTextureColumn(tex_patch,specific_texturecolumn);
+#endif
+#ifndef __vita__
           dcvars.prevsource = R_GetTextureColumn(tex_patch,specific_texturecolumn-1);
           dcvars.nextsource = R_GetTextureColumn(tex_patch,specific_texturecolumn+1);
+#endif
           dcvars.texheight = toptexheight;
+#ifdef __vita__
+          dcvars.colormap = fixedcolormap
+            ? fixedcolormap
+            : top_walllights[vita_light_index];
+#else
           if (!fixedcolormap)
             R_ApplyTopLight(curline->sidedef);
           R_ApplyLightColormap(&dcvars, rw_scale);
+#endif
+#ifdef __vita__
+          if (Vita_ProfileWallDeepActive())
+            Vita_ProfileWallColumn(
+              dcvars.yh >= dcvars.yl ? (unsigned int)(dcvars.yh - dcvars.yl + 1) : 0
+            );
+#endif
           colfunc(&dcvars);
           tex_patch = NULL;
           ceilingclip[rw_x] = mid;
@@ -640,14 +1004,42 @@ static void R_RenderSegLoop (void)
           dcvars.yl = mid;
           dcvars.yh = yh;
           dcvars.texturemid = rw_bottomtexturemid;
+#ifdef __vita__
+          if (!bottom_patch)
+            bottom_patch = R_TextureCompositePatchByNum(bottomtexture);
+          if (!fixedcolormap && !bottom_walllights)
+            bottom_walllights = GetLightTable(
+              R_BottomLightLevel(curline->sidedef, rw_lightlevel)
+            );
+          tex_patch = bottom_patch;
+#else
           tex_patch = R_TextureCompositePatchByNum(bottomtexture);
+#endif
+#ifdef __vita__
+          dcvars.source = R_VitaTextureColumn(tex_patch, specific_texturecolumn);
+#else
           dcvars.source = R_GetTextureColumn(tex_patch, specific_texturecolumn);
+#endif
+#ifndef __vita__
           dcvars.prevsource = R_GetTextureColumn(tex_patch, specific_texturecolumn-1);
           dcvars.nextsource = R_GetTextureColumn(tex_patch, specific_texturecolumn+1);
+#endif
           dcvars.texheight = bottomtexheight;
+#ifdef __vita__
+          dcvars.colormap = fixedcolormap
+            ? fixedcolormap
+            : bottom_walllights[vita_light_index];
+#else
           if (!fixedcolormap)
             R_ApplyBottomLight(curline->sidedef);
           R_ApplyLightColormap(&dcvars, rw_scale);
+#endif
+#ifdef __vita__
+          if (Vita_ProfileWallDeepActive())
+            Vita_ProfileWallColumn(
+              dcvars.yh >= dcvars.yl ? (unsigned int)(dcvars.yh - dcvars.yl + 1) : 0
+            );
+#endif
           colfunc(&dcvars);
           tex_patch = NULL;
           floorclip[rw_x] = mid;
@@ -663,7 +1055,14 @@ static void R_RenderSegLoop (void)
 
       // cph - if we completely blocked further sight through this column,
       // add this info to the solid columns array for r_bsp.c
-      if ((markceiling || markfloor) && (floorclip[rw_x] <= ceilingclip[rw_x] + 1))
+#ifdef __vita__
+      if (!rw_clipsolid &&
+          (markceiling || markfloor) &&
+          (floorclip[rw_x] <= ceilingclip[rw_x] + 1))
+#else
+      if ((markceiling || markfloor) &&
+          (floorclip[rw_x] <= ceilingclip[rw_x] + 1))
+#endif
       {
         solidcol[rw_x] = 1; didsolidcol = 1;
       }
@@ -677,6 +1076,14 @@ static void R_RenderSegLoop (void)
     topfrac += topstep;
     bottomfrac += bottomstep;
   }
+
+#ifdef __vita__
+  if (vita_wall_start)
+    Vita_ProfileWallAdd(
+      VITA_WALL_PROFILE_SEG_LOOP,
+      (unsigned int)(Vita_ProfileTimestamp() - vita_wall_start)
+    );
+#endif
 }
 
 //
@@ -684,10 +1091,13 @@ static void R_RenderSegLoop (void)
 // A wall segment will be drawn
 //  between start and stop pixels (inclusive).
 //
-void R_StoreWallRange(const int start, const int stop)
+void R_StoreWallRange(const int start, const int stop, dboolean clipsolid)
 {
   const int shift_bits = 1;
   int64_t dx, dy, dx1, dy1, len, dist;
+#ifdef __vita__
+  unsigned int vita_wall_start = 0;
+#endif
 
   if (ds_p == drawsegs+maxdrawsegs)   // killough 1/98 -- fix 2s line HOM
   {
@@ -709,6 +1119,14 @@ void R_StoreWallRange(const int start, const int stop)
 
     return;
   }
+
+#ifdef __vita__
+  if (Vita_ProfileWallDeepActive())
+  {
+    vita_wall_start = Vita_ProfileTimestamp();
+    Vita_ProfileWallStoreCall();
+  }
+#endif
 
 #ifdef RANGECHECK
   if (start >=viewwidth || start > stop)
@@ -732,13 +1150,25 @@ void R_StoreWallRange(const int start, const int stop)
   dy1 = ((int64_t)viewy - curline->v1->py) >> shift_bits;
   len = curline->halflength; // No need to shift
 
+#ifdef __vita__
+  dist = R_VitaSDiv64ByU32Exact(
+    dy * dx1 - dx * dy1,
+    (uint32_t)len
+  ) << shift_bits;
+#else
   dist = (((dy * dx1 - dx * dy1) / len) << shift_bits);
+#endif
   rw_distance = (fixed_t)BETWEEN(INT_MIN, INT_MAX, dist);
 
   ds_p->x1 = rw_x = start;
   ds_p->x2 = stop;
   ds_p->curline = curline;
   rw_stopx = stop+1;
+#ifdef __vita__
+  rw_clipsolid = clipsolid;
+#else
+  (void)clipsolid;
+#endif
 
   {     // killough 1/6/98, 2/1/98: remove limit on openings
     extern int *openings; // dropoff overflow
@@ -785,7 +1215,14 @@ void R_StoreWallRange(const int start, const int stop)
   if (stop > start)
   {
     ds_p->scale2 = R_ScaleFromGlobalAngle (viewangle + xtoviewangle[stop]);
+#ifdef __vita__
+    ds_p->scalestep = rw_scalestep = (fixed_t)R_VitaSDiv64ByU32Exact(
+      (int64_t)ds_p->scale2 - rw_scale,
+      (uint32_t)(stop - start)
+    );
+#else
     ds_p->scalestep = rw_scalestep = (ds_p->scale2-rw_scale) / (stop-start);
+#endif
   }
   else
     ds_p->scale2 = ds_p->scale1;
@@ -942,7 +1379,14 @@ void R_StoreWallRange(const int start, const int stop)
 
   if (segtextured)
   {
+#ifdef __vita__
+    rw_offset = (fixed_t)(R_VitaSDiv64ByU32Exact(
+      dx * dx1 + dy * dy1,
+      (uint32_t)len
+    ) << shift_bits);
+#else
     rw_offset = (fixed_t)(((dx * dx1 + dy * dy1) / len) << shift_bits);
+#endif
 
     rw_offset += sidedef->textureoffset + curline->offset;
 
@@ -1030,7 +1474,12 @@ void R_StoreWallRange(const int start, const int stop)
     }
   }
 
+  /* R_ClipWallSegment marks a known-solid range in one memset after return. */
+#ifdef __vita__
+  didsolidcol = rw_clipsolid ? 1 : 0;
+#else
   didsolidcol = 0;
+#endif
   R_RenderSegLoop();
 
   /* cph - if a column was made solid by this wall, we _must_ save full clipping info */
@@ -1072,4 +1521,12 @@ void R_StoreWallRange(const int start, const int stop)
     ds_p->bsilheight = INT_MAX;
   }
   ds_p++;
+
+#ifdef __vita__
+  if (vita_wall_start)
+    Vita_ProfileWallAdd(
+      VITA_WALL_PROFILE_STORE_RANGE,
+      (unsigned int)(Vita_ProfileTimestamp() - vita_wall_start)
+    );
+#endif
 }

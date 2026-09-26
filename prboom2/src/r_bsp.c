@@ -39,6 +39,7 @@
 #include "r_plane.h"
 #include "r_things.h"
 #include "r_bsp.h" // cph - sanity checking
+#include "r_state.h"
 #include "v_video.h"
 #include "lprintf.h"
 
@@ -91,6 +92,113 @@ void R_ClearDrawSegs(void)
 // e6y: resolution limitation is removed
 byte *solidcol;
 
+#ifdef __vita__
+static angle_t *vita_vertex_angles;
+static unsigned int *vita_vertex_angle_stamps;
+static int vita_vertex_angle_capacity;
+static unsigned int vita_vertex_angle_epoch = 1;
+
+static void R_VitaBeginVertexAngleCache(void)
+{
+  if (numvertexes > vita_vertex_angle_capacity)
+  {
+    vita_vertex_angles = Z_Realloc(
+      vita_vertex_angles,
+      numvertexes * sizeof(*vita_vertex_angles)
+    );
+    vita_vertex_angle_stamps = Z_Realloc(
+      vita_vertex_angle_stamps,
+      numvertexes * sizeof(*vita_vertex_angle_stamps)
+    );
+    vita_vertex_angle_capacity = numvertexes;
+    memset(
+      vita_vertex_angle_stamps,
+      0,
+      vita_vertex_angle_capacity * sizeof(*vita_vertex_angle_stamps)
+    );
+  }
+
+  if (++vita_vertex_angle_epoch == 0)
+  {
+    memset(
+      vita_vertex_angle_stamps,
+      0,
+      vita_vertex_angle_capacity * sizeof(*vita_vertex_angle_stamps)
+    );
+    vita_vertex_angle_epoch = 1;
+  }
+}
+
+static inline angle_t R_VitaVertexAngle(const vertex_t *vertex)
+{
+  const uintptr_t base = (uintptr_t)vertexes;
+  const uintptr_t address = (uintptr_t)vertex;
+  const uintptr_t end = base + (size_t)numvertexes * sizeof(*vertexes);
+
+  if (address >= base && address < end)
+  {
+    const size_t offset = address - base;
+
+    if (!(offset % sizeof(*vertexes)))
+    {
+      const int index = (int)(offset / sizeof(*vertexes));
+
+      if (vita_vertex_angle_stamps[index] == vita_vertex_angle_epoch)
+        return vita_vertex_angles[index];
+
+      vita_vertex_angles[index] = R_PointToAngleEx(vertex->px, vertex->py);
+      vita_vertex_angle_stamps[index] = vita_vertex_angle_epoch;
+      return vita_vertex_angles[index];
+    }
+  }
+
+  return R_PointToAngleEx(vertex->px, vertex->py);
+}
+
+static inline const byte *R_VitaFindSolidByte(
+  const byte *data,
+  size_t length,
+  byte value
+)
+{
+  const byte *p = data;
+  const byte *end = data + length;
+  const uint32_t repeated = (uint32_t)value * UINT32_C(0x01010101);
+
+  while (p < end && ((uintptr_t)p & 3u))
+  {
+    if (*p == value)
+      return p;
+    ++p;
+  }
+
+  while ((size_t)(end - p) >= sizeof(uint32_t))
+  {
+    uint32_t word;
+    uint32_t x;
+    uint32_t matches;
+
+    memcpy(&word, p, sizeof(word));
+    x = word ^ repeated;
+    matches = (x - UINT32_C(0x01010101)) & ~x & UINT32_C(0x80808080);
+
+    if (matches)
+      return p + (__builtin_ctz(matches) >> 3);
+
+    p += sizeof(uint32_t);
+  }
+
+  while (p < end)
+  {
+    if (*p == value)
+      return p;
+    ++p;
+  }
+
+  return NULL;
+}
+#endif
+
 // CPhipps -
 // R_ClipWallSegment
 //
@@ -99,16 +207,24 @@ byte *solidcol;
 
 static void R_ClipWallSegment(int first, int last, dboolean solid)
 {
-  byte *p;
+  const byte *p;
   while (first < last) {
     if (solidcol[first]) {
+#ifdef __vita__
+      if (!(p = R_VitaFindSolidByte(solidcol+first, last-first, 0))) return;
+#else
       if (!(p = memchr(solidcol+first, 0, last-first))) return; // All solid
+#endif
       first = p - solidcol;
     } else {
       int to;
+#ifdef __vita__
+      if (!(p = R_VitaFindSolidByte(solidcol+first, last-first, 1))) to = last;
+#else
       if (!(p = memchr(solidcol+first, 1, last-first))) to = last;
+#endif
       else to = p - solidcol;
-      R_StoreWallRange(first, to-1);
+      R_StoreWallRange(first, to-1, solid);
       if (solid) {
   memset(solidcol+first,1,to-first);
       }
@@ -124,6 +240,9 @@ static void R_ClipWallSegment(int first, int last, dboolean solid)
 void R_ClearClipSegs (void)
 {
   memset(solidcol, 0, SCREENWIDTH);
+#ifdef __vita__
+  R_VitaBeginVertexAngleCache();
+#endif
 }
 
 // killough 1/18/98 -- This function is used to fix the automap bug which
@@ -460,8 +579,13 @@ static void R_AddLine (seg_t *line)
     return;
   }
 
+#ifdef __vita__
+  angle1 = R_VitaVertexAngle(line->v1);
+  angle2 = R_VitaVertexAngle(line->v2);
+#else
   angle1 = R_PointToAngleEx(line->v1->px, line->v1->py);
   angle2 = R_PointToAngleEx(line->v2->px, line->v2->py);
+#endif
 
   // Clip to view edges.
   span = angle1 - angle2;
@@ -611,7 +735,11 @@ static dboolean R_CheckBBox(const fixed_t *bspcoord)
     if (sx1 == sx2)
       return false;
 
+#ifdef __vita__
+    if (!R_VitaFindSolidByte(solidcol+sx1, sx2-sx1, 0)) return false;
+#else
     if (!memchr(solidcol+sx1, 0, sx2-sx1)) return false;
+#endif
     // All columns it covers are already solidly covered
   }
 

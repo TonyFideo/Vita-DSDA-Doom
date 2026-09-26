@@ -85,6 +85,11 @@
 #include "dsda/wad_stats.h"
 #include "dsda/zipfile.h"
 
+#ifdef __vita__
+#include "vita/vita_system.h"
+#include "vita/vita_launcher.h"
+#endif
+
 /* Most of the following has been rewritten by Lee Killough
  *
  * killough 4/13/98: Make clock rate adjustable by scale factor
@@ -269,6 +274,11 @@ int main(int argc, char **argv)
 {
   dsda_ParseCommandLineArgs(argc, argv);
 
+#ifdef __vita__
+  Vita_InitFilesystem();
+  Vita_Log("[VITA] BOOT dsda-doom %s\n", PROJECT_VERSION);
+#endif
+
   if (dsda_Flag(dsda_arg_verbose))
     I_EnableVerboseLogging();
 
@@ -281,6 +291,11 @@ int main(int argc, char **argv)
     PrintVer();
     return 0;
   }
+
+#ifdef __vita__
+  if (!Vita_LauncherRun())
+    return 0;
+#endif
 
   // e6y: Check for conflicts.
   // Conflicting command-line parameters could cause the engine to be confused
@@ -319,7 +334,7 @@ int main(int argc, char **argv)
 
   I_AtExit(I_EssentialQuit, true, "I_EssentialQuit", exit_priority_first);
   I_AtExit(I_Quit, false, "I_Quit", exit_priority_last);
-#ifndef PRBOOM_DEBUG
+#if !defined(PRBOOM_DEBUG) && !defined(__vita__)
   if (!dsda_Flag(dsda_arg_sigsegv))
   {
     signal(SIGSEGV, I_SignalHandler);

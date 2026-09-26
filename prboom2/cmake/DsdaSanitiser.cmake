@@ -37,8 +37,16 @@ elseif(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     )
   endif()
 
+  if(VITA AND
+     NOT DSDA_ENABLE_ASAN AND
+     NOT DSDA_ENABLE_UBSAN AND
+     NOT DSDA_ENABLE_TSAN)
+    add_compile_options($<$<CONFIG:Release>:-fomit-frame-pointer>)
+  else()
+    add_compile_options(-fno-omit-frame-pointer)
+  endif()
+
   add_compile_options(
-    -fno-omit-frame-pointer
     $<$<BOOL:${DSDA_ENABLE_ASAN}>:-fsanitize=address>
     $<$<BOOL:${DSDA_ENABLE_UBSAN}>:-fsanitize=undefined>
     $<$<BOOL:${DSDA_ENABLE_TSAN}>:-fsanitize=thread>
