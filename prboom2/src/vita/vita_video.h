@@ -3,6 +3,7 @@
 
 int Vita_VideoInit(void);
 void Vita_VideoShutdown(void);
+void Vita_VideoSetVSync(int enabled);
 
 int Vita_VideoResize(int width, int height);
 void Vita_VideoSetPalette(const void *rgba_palette);

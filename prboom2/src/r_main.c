@@ -1140,6 +1140,12 @@ void R_RenderPlayerView (player_t* player)
 #endif
   DSDA_ADD_CONTEXT(sf_bsp_nodes);
   R_RenderBSPNodes();
+#ifdef __vita__
+  /* The fused four-column Vita path defers raster work until flush. Keep the
+   * final partial wall batch inside the BSP timer/profile rather than letting
+   * planes or reset_columns inherit that cost. */
+  R_VitaFlushDeferredWallColumns();
+#endif
   DSDA_REMOVE_CONTEXT(sf_bsp_nodes);
 #ifdef __vita__
   if (vita_prof_start)

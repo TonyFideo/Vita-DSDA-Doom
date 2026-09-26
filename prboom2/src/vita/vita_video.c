@@ -52,7 +52,6 @@ static int vita_present_state_ready;
 static GLfloat *vita_present_vertices;
 static GLfloat *vita_present_texcoords;
 static uint16_t *vita_present_indices;
-static int vita_launcher_framebuffer_released;
 
 static void Vita_Set2DState(void)
 {
@@ -128,8 +127,6 @@ int Vita_VideoInit(void)
   if (vita_video_initialized)
     return 1;
 
-  vita_launcher_framebuffer_released = 0;
-
   Vita_Log("[VITA] initializing VitaGL at %dx%d\n",
            VITA_DISPLAY_WIDTH, VITA_DISPLAY_HEIGHT);
 
@@ -156,7 +153,12 @@ int Vita_VideoInit(void)
            resolution_fallback,
            resolution_fallback ? "resolution fallback used" : "native resolution accepted");
 
-  vglWaitVblankStart(GL_TRUE);
+  /*
+   * DSDA owns the VSync setting. Keep presentation uncapped until the video
+   * frontend applies render_vsync; timedemo/fastdemo must never inherit a
+   * forced VitaGL vblank wait.
+   */
+  vglWaitVblankStart(GL_FALSE);
 
   /*
    * Do not submit viewport/depth/cull state before the first GXM scene.
@@ -218,6 +220,15 @@ int Vita_VideoInit(void)
            VITA_DISPLAY_WIDTH, VITA_DISPLAY_HEIGHT);
 
   return Vita_VideoResize(vita_internal_width, vita_internal_height);
+}
+
+void Vita_VideoSetVSync(int enabled)
+{
+  if (!vita_video_initialized)
+    return;
+
+  vglWaitVblankStart(enabled ? GL_TRUE : GL_FALSE);
+  Vita_Log("[VITA] presentation vsync: %s\n", enabled ? "on" : "off");
 }
 
 void Vita_VideoShutdown(void)
@@ -504,8 +515,10 @@ void Vita_VideoPresent(int width, int height)
     vita_prof_start = Vita_ProfileTimestamp();
 
   if (width != vita_texture_width || height != vita_texture_height)
+  {
     if (!Vita_VideoResize(width, height))
       return;
+  }
 
   Vita_ApplyCurrentPalette();
 
@@ -544,17 +557,6 @@ void Vita_VideoPresent(int width, int height)
   vita_frame_presented = 1;
   vita_frame_texture_index =
     (vita_frame_texture_index + 1) % VITA_P8_TEXTURE_RING;
-
-  if (!vita_launcher_framebuffer_released)
-  {
-    /*
-     * vglSwapBuffers queues the new GXM surface asynchronously. Wait until the
-     * display callback has installed it before freeing the launcher's CDRAM.
-     */
-    sceGxmDisplayQueueFinish();
-    Vita_LauncherReleaseFramebuffer();
-    vita_launcher_framebuffer_released = 1;
-  }
 
   if (vita_prof_start)
     Vita_ProfileAdd(

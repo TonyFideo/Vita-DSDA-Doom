@@ -42,8 +42,11 @@ typedef enum
 extern unsigned int vita_profile_plane_cache_hits;
 extern unsigned int vita_profile_plane_cache_misses;
 
+#define VITA_PROFILE_SAMPLE_STRIDE 8u
+
 void Vita_ProfileReset(void);
 int Vita_ProfileActive(void);
+int Vita_ProfileSampleActive(void);
 unsigned int Vita_ProfileTimestamp(void);
 void Vita_ProfileAdd(vita_profile_stage_t stage, unsigned int usec);
 void Vita_ProfileFrame(void);
@@ -64,5 +67,46 @@ void Vita_ProfileWallStoreCall(void);
 void Vita_ProfileWallSegLoopCall(void);
 void Vita_ProfileWallColumn(unsigned int pixels);
 void Vita_ProfileWallFlush(void);
+
+typedef enum
+{
+  VITA_WALL_FUSED_FALLBACK_SAME_X = 0,
+  VITA_WALL_FUSED_FALLBACK_ZERO_HEIGHT,
+  VITA_WALL_FUSED_FALLBACK_NON_POT,
+  VITA_WALL_FUSED_FALLBACK_X_GAP,
+  VITA_WALL_FUSED_FALLBACK_PARTIAL_END,
+  VITA_WALL_FUSED_FALLBACK_NO_COMMON,
+  VITA_WALL_FUSED_FALLBACK_OTHER,
+  VITA_WALL_FUSED_FALLBACK_COUNT
+} vita_wall_fused_fallback_t;
+
+typedef enum
+{
+  VITA_WALL_FUSED_REJECT_ZERO_HEIGHT = 0,
+  VITA_WALL_FUSED_REJECT_NON_POT,
+  VITA_WALL_FUSED_REJECT_OTHER,
+  VITA_WALL_FUSED_REJECT_COUNT
+} vita_wall_fused_reject_t;
+
+void Vita_ProfileWallFused4Success(unsigned int common_pixels);
+void Vita_ProfileWallFused4Fallback(vita_wall_fused_fallback_t reason);
+void Vita_ProfileWallFusedReject(vita_wall_fused_reject_t reason);
+
+void Vita_ProfilePlaneMap(
+  unsigned int map_us,
+  unsigned int span_us,
+  unsigned int pixels
+);
+
+void Vita_ProfileMaskedFrame(
+  unsigned int sprites,
+  unsigned int actual_candidates,
+  unsigned int old3_candidates,
+  unsigned int build_us,
+  unsigned int clip_us,
+  unsigned int sprite_draw_us,
+  unsigned int rest_us
+);
+void Vita_ProfileMaskedNonPotColumns(unsigned int columns);
 
 #endif

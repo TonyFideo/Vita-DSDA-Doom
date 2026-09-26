@@ -579,6 +579,10 @@ function(AddGameExecutable TARGET SOURCES)
     )
 
     if(VITA)
+        set_property(TARGET ${TARGET}
+            PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
+        )
+
         target_compile_definitions(${TARGET}
             PRIVATE
             VITA_DISPLAY_WIDTH=${VITA_DISPLAY_WIDTH}

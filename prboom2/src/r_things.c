@@ -48,6 +48,10 @@
 #include "dsda/render_stats.h"
 #include "dsda/settings.h"
 
+#ifdef __vita__
+#include "vita/vita_system.h"
+#endif
+
 #define BASEYCENTER 100
 
 static int *clipbot = NULL; // killough 2/8/98: // dropoff overflow
@@ -85,12 +89,60 @@ typedef struct drawsegs_xrange_s
   int count;
 } drawsegs_xrange_t;
 
-#define DS_RANGES_COUNT 3
+enum
+{
+  DS_RANGE_FULL = 0,
+  DS_RANGE_LEFT,
+  DS_RANGE_RIGHT,
+#ifdef __vita__
+  DS_RANGE_Q0,
+  DS_RANGE_Q1,
+  DS_RANGE_Q2,
+  DS_RANGE_Q3,
+#endif
+  DS_RANGES_COUNT
+};
+
 static drawsegs_xrange_t drawsegs_xranges[DS_RANGES_COUNT];
 
 static drawseg_xrange_item_t *drawsegs_xrange;
 static unsigned int drawsegs_xrange_size = 0;
 static int drawsegs_xrange_count = 0;
+
+#ifdef __vita__
+static unsigned int vita_masked_frame_candidates;
+static unsigned int vita_masked_frame_old3_candidates;
+static unsigned int vita_masked_frame_clip_us;
+static unsigned int vita_masked_frame_sprite_draw_us;
+static int vita_masked_profile_sample;
+
+static inline int R_VitaSpriteDrawsegRange(
+  const vissprite_t *spr,
+  int q1,
+  int q2,
+  int q3
+)
+{
+  /*
+   * Select exactly one hierarchy node: the smallest range containing the
+   * complete sprite. Never merge sibling lists; a drawseg can belong to more
+   * than one child list and maskedtexturecol has consume-on-draw semantics.
+   */
+  if (spr->x2 < q1)
+    return DS_RANGE_Q0;
+  if (spr->x1 >= q1 && spr->x2 < q2)
+    return DS_RANGE_Q1;
+  if (spr->x1 >= q2 && spr->x2 < q3)
+    return DS_RANGE_Q2;
+  if (spr->x1 >= q3)
+    return DS_RANGE_Q3;
+  if (spr->x2 < q2)
+    return DS_RANGE_LEFT;
+  if (spr->x1 >= q2)
+    return DS_RANGE_RIGHT;
+  return DS_RANGE_FULL;
+}
+#endif
 
 // constant arrays
 //  used for psprite clipping and initializing clipping
@@ -492,8 +544,10 @@ void R_DrawMaskedColumn(
       if (dcvars->yl >= 0 && dcvars->yl <= dcvars->yh && dcvars->yh < viewheight)
         {
           dcvars->source = column->pixels + post->topdelta;
+#ifndef __vita__
           dcvars->prevsource = prevcolumn->pixels + post->topdelta;
           dcvars->nextsource = nextcolumn->pixels + post->topdelta;
+#endif
 
           dcvars->texturemid = basetexturemid - (post->topdelta<<FRACBITS);
           dcvars->pspritepostheight = dcvars->isplayersprite ? post->length : 0;
@@ -623,6 +677,21 @@ static void R_DrawVisSprite(vissprite_t *vis)
 
       if (!dcvars.colormap) R_CheckFuzzCol(dcvars.x, colheight);
 
+#ifdef __vita__
+      {
+        const rcolumn_t *column =
+          R_GetPatchColumnClamped(patch, texturecolumn);
+
+        R_DrawMaskedColumn(
+          patch,
+          colfunc,
+          &dcvars,
+          column,
+          column,
+          column
+        );
+      }
+#else
       R_DrawMaskedColumn(
         patch,
         colfunc,
@@ -631,6 +700,7 @@ static void R_DrawVisSprite(vissprite_t *vis)
         R_GetPatchColumnClamped(patch, texturecolumn-1),
         R_GetPatchColumnClamped(patch, texturecolumn+1)
       );
+#endif
     }
 }
 
@@ -1423,6 +1493,12 @@ static void R_DrawSprite (vissprite_t* spr)
   int     r2;
   fixed_t scale;
   fixed_t lowscale;
+#ifdef __vita__
+  unsigned int vita_sprite_start = 0;
+
+  if (vita_masked_profile_sample)
+    vita_sprite_start = Vita_ProfileTimestamp();
+#endif
 
   for (x = spr->x1 ; x<=spr->x2 ; x++)
     clipbot[x] = -2;
@@ -1437,11 +1513,12 @@ static void R_DrawSprite (vissprite_t* spr)
   // and buggy, by going past LEFT end of array):
 
   // e6y: optimization
-  if (drawsegs_xrange_size)
+  if (drawsegs_xrange_count > 0)
   {
-    const drawseg_xrange_item_t *last = &drawsegs_xrange[drawsegs_xrange_count - 1];
-    drawseg_xrange_item_t *curr = &drawsegs_xrange[-1];
-    while (++curr <= last)
+    const drawseg_xrange_item_t *curr = drawsegs_xrange;
+    const drawseg_xrange_item_t *last = curr + drawsegs_xrange_count;
+
+    for (; curr < last; ++curr)
     {
       // determine if the drawseg obscures the sprite
       if (curr->x1 > spr->x2 || curr->x2 < spr->x1)
@@ -1487,6 +1564,7 @@ static void R_DrawSprite (vissprite_t* spr)
         for (x=r1 ; x<=r2 ; x++)
           if (cliptop[x] == -2)
             cliptop[x] = ds->sprtopclip[x];
+
     }
   }
 
@@ -1546,7 +1624,20 @@ static void R_DrawSprite (vissprite_t* spr)
 
   mfloorclip = clipbot;
   mceilingclip = cliptop;
+#ifdef __vita__
+  if (vita_masked_profile_sample)
+  {
+    const unsigned int now = Vita_ProfileTimestamp();
+    vita_masked_frame_clip_us += now - vita_sprite_start;
+    vita_sprite_start = now;
+  }
+#endif
   R_DrawVisSprite (spr);
+#ifdef __vita__
+  if (vita_masked_profile_sample)
+    vita_masked_frame_sprite_draw_us +=
+      Vita_ProfileTimestamp() - vita_sprite_start;
+#endif
 }
 
 //
@@ -1558,8 +1649,27 @@ void R_DrawMasked(void)
   int i;
   drawseg_t *ds;
   int cx = SCREENWIDTH / 2;
+#ifdef __vita__
+  const int q1 = SCREENWIDTH / 4;
+  const int q2 = cx;
+  const int q3 = (SCREENWIDTH * 3) / 4;
+  unsigned int vita_bin_start = 0;
+  unsigned int vita_bin_build_us = 0;
+  unsigned int vita_rest_start = 0;
+  unsigned int vita_rest_us = 0;
+#endif
 
   R_SortVisSprites();
+
+#ifdef __vita__
+  vita_masked_frame_candidates = 0;
+  vita_masked_frame_old3_candidates = 0;
+  vita_masked_frame_clip_us = 0;
+  vita_masked_frame_sprite_draw_us = 0;
+  vita_masked_profile_sample = Vita_ProfileSampleActive();
+  if (Vita_ProfileActive())
+    vita_bin_start = Vita_ProfileTimestamp();
+#endif
 
   // e6y
   // Reducing of cache misses in the following R_DrawSprite()
@@ -1584,28 +1694,54 @@ void R_DrawMasked(void)
     {
       if (ds->silhouette || ds->maskedtexturecol)
       {
-        drawsegs_xranges[0].items[drawsegs_xranges[0].count].x1 = ds->x1;
-        drawsegs_xranges[0].items[drawsegs_xranges[0].count].x2 = ds->x2;
-        drawsegs_xranges[0].items[drawsegs_xranges[0].count].user = ds;
+        const drawseg_xrange_item_t item = { ds->x1, ds->x2, ds };
+
+        drawsegs_xranges[DS_RANGE_FULL].items[
+          drawsegs_xranges[DS_RANGE_FULL].count++
+        ] = item;
 
         // e6y: ~13% of speed improvement on sunder.wad map10
         if (ds->x1 < cx)
         {
-          drawsegs_xranges[1].items[drawsegs_xranges[1].count] =
-            drawsegs_xranges[0].items[drawsegs_xranges[0].count];
-          drawsegs_xranges[1].count++;
+          drawsegs_xranges[DS_RANGE_LEFT].items[
+            drawsegs_xranges[DS_RANGE_LEFT].count++
+          ] = item;
         }
         if (ds->x2 >= cx)
         {
-          drawsegs_xranges[2].items[drawsegs_xranges[2].count] =
-            drawsegs_xranges[0].items[drawsegs_xranges[0].count];
-          drawsegs_xranges[2].count++;
+          drawsegs_xranges[DS_RANGE_RIGHT].items[
+            drawsegs_xranges[DS_RANGE_RIGHT].count++
+          ] = item;
         }
 
-        drawsegs_xranges[0].count++;
+#ifdef __vita__
+        /* Inclusive drawseg [x1,x2] intersects half-open quarter [lo,hi). */
+        if (ds->x1 < q1)
+          drawsegs_xranges[DS_RANGE_Q0].items[
+            drawsegs_xranges[DS_RANGE_Q0].count++
+          ] = item;
+        if (ds->x1 < q2 && ds->x2 >= q1)
+          drawsegs_xranges[DS_RANGE_Q1].items[
+            drawsegs_xranges[DS_RANGE_Q1].count++
+          ] = item;
+        if (ds->x1 < q3 && ds->x2 >= q2)
+          drawsegs_xranges[DS_RANGE_Q2].items[
+            drawsegs_xranges[DS_RANGE_Q2].count++
+          ] = item;
+        if (ds->x2 >= q3)
+          drawsegs_xranges[DS_RANGE_Q3].items[
+            drawsegs_xranges[DS_RANGE_Q3].count++
+          ] = item;
+#endif
       }
     }
   }
+
+#ifdef __vita__
+  if (vita_bin_start)
+    vita_bin_build_us =
+      (unsigned int)(Vita_ProfileTimestamp() - vita_bin_start);
+#endif
 
   // draw all vissprites back to front
 
@@ -1615,21 +1751,39 @@ void R_DrawMasked(void)
   {
     vissprite_t* spr = vissprite_ptrs[i];
 
+#ifdef __vita__
+    const int range = R_VitaSpriteDrawsegRange(spr, q1, q2, q3);
+
+    drawsegs_xrange = drawsegs_xranges[range].items;
+    drawsegs_xrange_count = drawsegs_xranges[range].count;
+    vita_masked_frame_candidates +=
+      (unsigned int)drawsegs_xranges[range].count;
+    if (spr->x2 < cx)
+      vita_masked_frame_old3_candidates +=
+        (unsigned int)drawsegs_xranges[DS_RANGE_LEFT].count;
+    else if (spr->x1 >= cx)
+      vita_masked_frame_old3_candidates +=
+        (unsigned int)drawsegs_xranges[DS_RANGE_RIGHT].count;
+    else
+      vita_masked_frame_old3_candidates +=
+        (unsigned int)drawsegs_xranges[DS_RANGE_FULL].count;
+#else
     if (spr->x2 < cx)
     {
-      drawsegs_xrange = drawsegs_xranges[1].items;
-      drawsegs_xrange_count = drawsegs_xranges[1].count;
+      drawsegs_xrange = drawsegs_xranges[DS_RANGE_LEFT].items;
+      drawsegs_xrange_count = drawsegs_xranges[DS_RANGE_LEFT].count;
     }
     else if (spr->x1 >= cx)
     {
-      drawsegs_xrange = drawsegs_xranges[2].items;
-      drawsegs_xrange_count = drawsegs_xranges[2].count;
+      drawsegs_xrange = drawsegs_xranges[DS_RANGE_RIGHT].items;
+      drawsegs_xrange_count = drawsegs_xranges[DS_RANGE_RIGHT].count;
     }
     else
     {
-      drawsegs_xrange = drawsegs_xranges[0].items;
-      drawsegs_xrange_count = drawsegs_xranges[0].count;
+      drawsegs_xrange = drawsegs_xranges[DS_RANGE_FULL].items;
+      drawsegs_xrange_count = drawsegs_xranges[DS_RANGE_FULL].count;
     }
+#endif
 
     R_DrawSprite(vissprite_ptrs[i]);
   }
@@ -1642,10 +1796,31 @@ void R_DrawMasked(void)
 
   //    for (ds=ds_p-1 ; ds >= drawsegs ; ds--)    old buggy code
 
+#ifdef __vita__
+  if (vita_masked_profile_sample)
+    vita_rest_start = Vita_ProfileTimestamp();
+#endif
+
   for (ds=ds_p ; ds-- > drawsegs ; )  // new -- killough
     if (ds->maskedtexturecol)
       R_RenderMaskedSegRange(ds, ds->x1, ds->x2);
 
   // draw the psprites on top of everything
   R_DrawPlayerSprites ();
+
+#ifdef __vita__
+  if (vita_masked_profile_sample)
+    vita_rest_us = Vita_ProfileTimestamp() - vita_rest_start;
+
+  if (Vita_ProfileActive())
+    Vita_ProfileMaskedFrame(
+      (unsigned int)num_vissprite,
+      vita_masked_frame_candidates,
+      vita_masked_frame_old3_candidates,
+      vita_bin_build_us,
+      vita_masked_frame_clip_us,
+      vita_masked_frame_sprite_draw_us,
+      vita_rest_us
+    );
+#endif
 }

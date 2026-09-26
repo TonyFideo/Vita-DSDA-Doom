@@ -105,6 +105,20 @@ static void R_DRAWCOLUMN_FUNCNAME(draw_column_vars_t *dcvars)
     frac = dcvars->texturemid + (dcvars->yl-centery)*fracstep;
 #endif
 
+#ifdef __vita__
+#if (R_DRAWCOLUMN_PIPELINE == RDC_STANDARD)
+  if (R_VitaTryQueueFused4(dcvars, frac, fracstep))
+    return;
+#else
+  /* A different pipeline cannot share the deferred opaque wall batch. */
+  if (vita_fused4_pending)
+  {
+    vita_fused4_flush_reason = VITA_WALL_FUSED_FALLBACK_OTHER;
+    R_FlushColumns();
+  }
+#endif
+#endif
+
   // Framebuffer destination address.
    // SoM: MAGIC
    {

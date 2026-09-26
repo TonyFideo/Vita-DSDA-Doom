@@ -1314,6 +1314,11 @@ void I_InitGraphics(void)
 void I_UpdateVideoMode(void)
 {
 #ifdef __vita__
+  const dboolean vita_vsync =
+    dsda_IntConfig(dsda_config_render_vsync) &&
+    !dsda_Flag(dsda_arg_timedemo) &&
+    !dsda_Flag(dsda_arg_fastdemo);
+
   if (screen)
   {
     /*
@@ -1334,6 +1339,8 @@ void I_UpdateVideoMode(void)
 
   if (!Vita_VideoInit())
     I_Error("VitaGL initialization failed");
+
+  Vita_VideoSetVSync(vita_vsync);
 
   if (!Vita_VideoResize(SCREENWIDTH, SCREENHEIGHT))
     I_Error("Unable to create Vita software presentation texture %dx%d",
