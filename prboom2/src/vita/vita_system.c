@@ -14,6 +14,7 @@
 #include "z_zone.h"
 
 #include "vita/vita_system.h"
+#include "vita/vita_loadorder.h"
 
 #define VITA_PATH_MAX 1024
 #define VITA_MAX_WADS 128
@@ -729,6 +730,8 @@ static char vita_iwad_path[VITA_PATH_MAX];
 static char vita_pwad_paths[VITA_MAX_WADS][VITA_PATH_MAX];
 static int vita_pwad_count;
 static int vita_selected_pwad = -1;
+static char vita_deh_paths[VITA_MAX_WADS][VITA_PATH_MAX];
+static int vita_deh_count;
 
 static int Vita_HasWadExtension(const char *name)
 {
@@ -937,6 +940,7 @@ void Vita_RefreshPWADs(void)
   }
 
   vita_pwad_count = 0;
+  vita_deh_count = 0;
   vita_selected_pwad = -1;
 
   for (partition_index = 0;
@@ -960,11 +964,30 @@ void Vita_RefreshPWADs(void)
 
     while ((entry = readdir(dir)) != NULL)
     {
-      if (!Vita_HasWadExtension(entry->d_name))
+      const vita_file_kind_t kind = Vita_ClassifyFileName(entry->d_name);
+
+      /* DEH/BEX patches live in the same folder as PWADs. */
+      if (kind == VITA_FILE_DEH)
+      {
+        if (vita_deh_count < VITA_MAX_WADS)
+        {
+          snprintf(
+            vita_deh_paths[vita_deh_count],
+            sizeof(vita_deh_paths[vita_deh_count]),
+            "%s/%s",
+            pwad_dir,
+            entry->d_name
+          );
+          ++vita_deh_count;
+        }
+        continue;
+      }
+
+      if (kind != VITA_FILE_WAD)
         continue;
 
       if (vita_pwad_count >= VITA_MAX_WADS)
-        break;
+        continue;
 
       snprintf(
         vita_pwad_paths[vita_pwad_count],
@@ -985,6 +1008,16 @@ void Vita_RefreshPWADs(void)
       vita_pwad_paths,
       (size_t)vita_pwad_count,
       sizeof(vita_pwad_paths[0]),
+      Vita_CompareWADPaths
+    );
+  }
+
+  if (vita_deh_count > 1)
+  {
+    qsort(
+      vita_deh_paths,
+      (size_t)vita_deh_count,
+      sizeof(vita_deh_paths[0]),
       Vita_CompareWADPaths
     );
   }
@@ -1068,6 +1101,7 @@ void Vita_InitFilesystem(void)
   Vita_Log("[VITA] temp dir: %s\n", vita_temp_dir);
   Vita_Log("[VITA] IWADs discovered: %d\n", vita_iwad_count);
   Vita_Log("[VITA] PWADs discovered: %d\n", vita_pwad_count);
+  Vita_Log("[VITA] DEH/BEX discovered: %d\n", vita_deh_count);
 
   if (vita_iwad_path[0])
     Vita_Log("[VITA] default IWAD: %s\n", vita_iwad_path);
@@ -1186,6 +1220,34 @@ void Vita_SelectPWAD(int index)
     Vita_Log("[VITA] launcher PWAD selected: %s\n", vita_pwad_paths[index]);
   else
     Vita_Log("[VITA] launcher PWAD selected: none\n");
+}
+
+int Vita_DEHCount(void)
+{
+  Vita_InitFilesystem();
+  return vita_deh_count;
+}
+
+const char *Vita_DEHPathAt(int index)
+{
+  Vita_InitFilesystem();
+
+  if (index < 0 || index >= vita_deh_count)
+    return NULL;
+
+  return vita_deh_paths[index];
+}
+
+const char *Vita_DEHNameAt(int index)
+{
+  const char *path = Vita_DEHPathAt(index);
+  const char *slash;
+
+  if (!path)
+    return NULL;
+
+  slash = strrchr(path, '/');
+  return slash ? slash + 1 : path;
 }
 
 char *Vita_FindAutoIWAD(void)
