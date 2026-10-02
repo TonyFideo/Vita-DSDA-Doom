@@ -9,6 +9,7 @@
 #include <psp2/kernel/sysmem.h>
 
 #include "vita/vita_launcher.h"
+#include "vita/vita_loadorder.h"
 #include "vita/vita_system.h"
 #include "vita/vita_video.h"
 
@@ -455,21 +456,19 @@ static void Vita_LauncherIWADLabel(int index, char *label, size_t label_size)
   }
 }
 
-static void Vita_LauncherPWADLabel(int selector_index, char *label, size_t label_size)
+/*
+ * Label for the file under the cursor in the PWAD or DEH row:
+ * "[n] PART NAME" when it is n-th in the load order, "[ ] PART NAME" otherwise.
+ */
+static void Vita_LauncherFileLabel(
+  const char *path,
+  const char *name,
+  int order_position,
+  char *label,
+  size_t label_size)
 {
-  const char *path;
-  const char *name;
   char partition[5] = "----";
-  const int pwad_index = selector_index - 1;
-
-  if (selector_index <= 0)
-  {
-    snprintf(label, label_size, "NINGUNO");
-    return;
-  }
-
-  path = Vita_PWADPathAt(pwad_index);
-  name = Vita_PWADNameAt(pwad_index);
+  char slot[8] = "[ ]";
 
   if (!path || !name)
   {
@@ -483,7 +482,10 @@ static void Vita_LauncherPWADLabel(int selector_index, char *label, size_t label
     partition[4] = '\0';
   }
 
-  snprintf(label, label_size, "%s %s", partition, name);
+  if (order_position >= 0)
+    snprintf(slot, sizeof(slot), "[%d]", order_position + 1);
+
+  snprintf(label, label_size, "%s %s %s", slot, partition, name);
   Vita_LauncherUppercase(label);
 
   if (strlen(label) > 46)
@@ -605,25 +607,36 @@ static int Vita_LauncherResolveTimedemo(
   return 0;
 }
 
+#define VITA_LAUNCHER_ROW_PWAD 3
+#define VITA_LAUNCHER_ROW_DEH 4
+#define VITA_LAUNCHER_ROW_TIMEDEMO 5
+#define VITA_LAUNCHER_ROW_START 6
+#define VITA_LAUNCHER_ROW_COUNT 7
+#define VITA_LAUNCHER_ROW_TOP 136.0f
+#define VITA_LAUNCHER_ROW_STEP 46.0f
+
+static vita_loadorder_t vita_launcher_pwads;
+static vita_loadorder_t vita_launcher_dehs;
+
 static void Vita_LauncherDrawRow(
   int row,
   int selected,
   const char *name,
   const char *value)
 {
-  const float y = 136.0f + row * 52.0f;
+  const float y = VITA_LAUNCHER_ROW_TOP + row * VITA_LAUNCHER_ROW_STEP;
 
   if (selected)
   {
     Vita_LauncherDrawRect(
-      80.0f, y - 11.0f, 800.0f, 48.0f,
+      80.0f, y - 10.0f, 800.0f, 42.0f,
       0.10f, 0.36f, 0.55f, 0.90f
     );
   }
   else
   {
     Vita_LauncherDrawRect(
-      80.0f, y - 11.0f, 800.0f, 48.0f,
+      80.0f, y - 10.0f, 800.0f, 42.0f,
       0.08f, 0.08f, 0.10f, 0.82f
     );
   }
@@ -657,19 +670,38 @@ static void Vita_LauncherDraw(
   int selected_row,
   int resolution_index,
   int iwad_index,
-  int pwad_selector_index,
+  int pwad_cursor,
+  int deh_cursor,
   int timedemo_enabled,
   const char *status)
 {
   char iwad_label[64];
   char pwad_label[64];
+  char deh_label[64];
+  char pwad_row_name[24];
+  char deh_row_name[24];
   const char *renderer_name =
     vita_launcher_renderer == VITA_LAUNCHER_RENDERER_SOFTWARE
       ? "SOFTWARE"
       : "VITAGL";
 
   Vita_LauncherIWADLabel(iwad_index, iwad_label, sizeof(iwad_label));
-  Vita_LauncherPWADLabel(pwad_selector_index, pwad_label, sizeof(pwad_label));
+  Vita_LauncherFileLabel(
+    Vita_PWADPathAt(pwad_cursor),
+    Vita_PWADNameAt(pwad_cursor),
+    Vita_LoadOrderPosition(&vita_launcher_pwads, pwad_cursor),
+    pwad_label,
+    sizeof(pwad_label)
+  );
+  Vita_LauncherFileLabel(
+    Vita_DEHPathAt(deh_cursor),
+    Vita_DEHNameAt(deh_cursor),
+    Vita_LoadOrderPosition(&vita_launcher_dehs, deh_cursor),
+    deh_label,
+    sizeof(deh_label)
+  );
+  snprintf(pwad_row_name, sizeof(pwad_row_name), "PWADS (%d)", vita_launcher_pwads.count);
+  snprintf(deh_row_name, sizeof(deh_row_name), "DEH/BEX (%d)", vita_launcher_dehs.count);
 
   Vita_LauncherClear(4, 5, 7, 255);
 
@@ -705,30 +737,39 @@ static void Vita_LauncherDraw(
   );
 
   Vita_LauncherDrawRow(
-    3,
-    selected_row == 3,
-    "PWAD",
+    VITA_LAUNCHER_ROW_PWAD,
+    selected_row == VITA_LAUNCHER_ROW_PWAD,
+    pwad_row_name,
     pwad_label
   );
 
   Vita_LauncherDrawRow(
-    4,
-    selected_row == 4,
+    VITA_LAUNCHER_ROW_DEH,
+    selected_row == VITA_LAUNCHER_ROW_DEH,
+    deh_row_name,
+    deh_label
+  );
+
+  Vita_LauncherDrawRow(
+    VITA_LAUNCHER_ROW_TIMEDEMO,
+    selected_row == VITA_LAUNCHER_ROW_TIMEDEMO,
     "TIMEDEMO",
     timedemo_enabled ? "ACTIVADO" : "DESACTIVADO"
   );
 
   Vita_LauncherDrawRow(
-    5,
-    selected_row == 5,
+    VITA_LAUNCHER_ROW_START,
+    selected_row == VITA_LAUNCHER_ROW_START,
     "INICIAR JUEGO",
     NULL
   );
 
-  if (selected_row == 5)
+  if (selected_row == VITA_LAUNCHER_ROW_START)
   {
     Vita_LauncherDrawText(
-      680.0f, 406.0f, 1.10f, "[ X ]",
+      680.0f,
+      VITA_LAUNCHER_ROW_TOP + VITA_LAUNCHER_ROW_START * VITA_LAUNCHER_ROW_STEP,
+      1.10f, "[ X ]",
       0.70f, 0.90f, 1.0f, 1.0f
     );
   }
@@ -775,6 +816,42 @@ static int Vita_LauncherWrap(int value, int count)
   return value;
 }
 
+static void Vita_LauncherEmitArg(int is_deh, const char *path)
+{
+  dsda_AppendStringArg(is_deh ? dsda_arg_deh : dsda_arg_file, path);
+  Vita_Log("[VITA] launcher arg: %s \"%s\"\n", is_deh ? "-deh" : "-file", path);
+}
+
+/* Adds or removes the file under the cursor; reports a full list in status. */
+static void Vita_LauncherToggleFile(
+  vita_loadorder_t *order,
+  int cursor,
+  int available,
+  const char *kind,
+  char *status,
+  size_t status_size)
+{
+  const vita_loadorder_result_t result =
+    Vita_LoadOrderToggle(order, cursor, available);
+
+  if (result == VITA_LOADORDER_FULL)
+  {
+    snprintf(status, status_size, "MAXIMO %d ARCHIVOS %s", VITA_LOADORDER_MAX, kind);
+    return;
+  }
+
+  if (result == VITA_LOADORDER_ADDED || result == VITA_LOADORDER_REMOVED)
+  {
+    Vita_Log(
+      "[VITA] launcher %s %s index=%d count=%d\n",
+      kind,
+      result == VITA_LOADORDER_ADDED ? "added" : "removed",
+      cursor,
+      order->count
+    );
+  }
+}
+
 int Vita_LauncherRun(void)
 {
   SceCtrlData pad;
@@ -786,7 +863,9 @@ int Vita_LauncherRun(void)
   int iwad_count;
   int iwad_index;
   int pwad_count;
-  int pwad_selector_index = 0;
+  int pwad_cursor = 0;
+  int deh_count;
+  int deh_cursor = 0;
   int timedemo_enabled = 0;
   char status[96] = {0};
 
@@ -795,6 +874,9 @@ int Vita_LauncherRun(void)
   iwad_count = Vita_IWADCount();
   iwad_index = Vita_SelectedIWADIndex();
   pwad_count = Vita_PWADCount();
+  deh_count = Vita_DEHCount();
+  Vita_LoadOrderClear(&vita_launcher_pwads);
+  Vita_LoadOrderClear(&vita_launcher_dehs);
 
   if (!Vita_LauncherInitFramebuffer())
   {
@@ -805,9 +887,10 @@ int Vita_LauncherRun(void)
   sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG_WIDE);
 
   Vita_Log(
-    "[VITA] launcher opened: %d IWAD(s), %d PWAD(s) available\n",
+    "[VITA] launcher opened: %d IWAD(s), %d PWAD(s), %d DEH/BEX available\n",
     iwad_count,
-    pwad_count
+    pwad_count,
+    deh_count
   );
 
   for (;;)
@@ -824,13 +907,13 @@ int Vita_LauncherRun(void)
 
     if (pressed & SCE_CTRL_UP)
     {
-      selected_row = Vita_LauncherWrap(selected_row - 1, 6);
+      selected_row = Vita_LauncherWrap(selected_row - 1, VITA_LAUNCHER_ROW_COUNT);
       status[0] = '\0';
     }
 
     if (pressed & SCE_CTRL_DOWN)
     {
-      selected_row = Vita_LauncherWrap(selected_row + 1, 6);
+      selected_row = Vita_LauncherWrap(selected_row + 1, VITA_LAUNCHER_ROW_COUNT);
       status[0] = '\0';
     }
 
@@ -864,15 +947,17 @@ int Vita_LauncherRun(void)
           }
           break;
 
-        case 3:
-          pwad_selector_index = Vita_LauncherWrap(
-            pwad_selector_index + direction,
-            pwad_count + 1
-          );
-          Vita_SelectPWAD(pwad_selector_index - 1);
+        case VITA_LAUNCHER_ROW_PWAD:
+          if (pwad_count > 0)
+            pwad_cursor = Vita_LauncherWrap(pwad_cursor + direction, pwad_count);
           break;
 
-        case 4:
+        case VITA_LAUNCHER_ROW_DEH:
+          if (deh_count > 0)
+            deh_cursor = Vita_LauncherWrap(deh_cursor + direction, deh_count);
+          break;
+
+        case VITA_LAUNCHER_ROW_TIMEDEMO:
           timedemo_enabled = !timedemo_enabled;
           break;
 
@@ -883,12 +968,28 @@ int Vita_LauncherRun(void)
 
     if (pressed & SCE_CTRL_CROSS)
     {
-      if (selected_row == 4)
+      if (selected_row == VITA_LAUNCHER_ROW_PWAD)
+      {
+        status[0] = '\0';
+        Vita_LauncherToggleFile(
+          &vita_launcher_pwads, pwad_cursor, pwad_count, "PWAD",
+          status, sizeof(status)
+        );
+      }
+      else if (selected_row == VITA_LAUNCHER_ROW_DEH)
+      {
+        status[0] = '\0';
+        Vita_LauncherToggleFile(
+          &vita_launcher_dehs, deh_cursor, deh_count, "DEH",
+          status, sizeof(status)
+        );
+      }
+      else if (selected_row == VITA_LAUNCHER_ROW_TIMEDEMO)
       {
         timedemo_enabled = !timedemo_enabled;
         status[0] = '\0';
       }
-      else if (selected_row == 5)
+      else if (selected_row == VITA_LAUNCHER_ROW_START)
       {
         if (iwad_count <= 0)
         {
@@ -911,7 +1012,8 @@ int Vita_LauncherRun(void)
           const vita_resolution_option_t *resolution =
             &vita_resolution_options[resolution_index];
 
-          const int pwad_index = pwad_selector_index - 1;
+          /* The last PWAD in load order wins, so it is the timedemo source. */
+          const int pwad_index = Vita_LoadOrderLast(&vita_launcher_pwads);
           const char *pwad_path = NULL;
           const char *timedemo_source = NULL;
           char timedemo_lump[9] = {0};
@@ -920,11 +1022,7 @@ int Vita_LauncherRun(void)
           Vita_SelectPWAD(pwad_index);
 
           if (pwad_index >= 0)
-          {
             pwad_path = Vita_PWADPathAt(pwad_index);
-            if (pwad_path)
-              dsda_AppendStringArg(dsda_arg_file, pwad_path);
-          }
 
           if (timedemo_enabled)
           {
@@ -954,16 +1052,26 @@ int Vita_LauncherRun(void)
             );
           }
 
+          Vita_LoadOrderEmit(
+            &vita_launcher_pwads,
+            Vita_PWADPathAt,
+            &vita_launcher_dehs,
+            Vita_DEHPathAt,
+            Vita_LauncherEmitArg
+          );
+
           Vita_VideoSetInternalResolution(
             resolution->width,
             resolution->height
           );
 
           Vita_Log(
-            "[VITA] launcher start: renderer=software resolution=%dx%d IWAD=%s PWAD=%s timedemo=%s%s%s\n",
+            "[VITA] launcher start: renderer=software resolution=%dx%d IWAD=%s PWADs=%d DEHs=%d last PWAD=%s timedemo=%s%s%s\n",
             resolution->width,
             resolution->height,
             Vita_IWADPathAt(iwad_index),
+            vita_launcher_pwads.count,
+            vita_launcher_dehs.count,
             pwad_path ? pwad_path : "none",
             timedemo_enabled ? "on" : "off",
             timedemo_enabled ? " lump=" : "",
@@ -986,7 +1094,8 @@ int Vita_LauncherRun(void)
       selected_row,
       resolution_index,
       iwad_index,
-      pwad_selector_index,
+      pwad_cursor,
+      deh_cursor,
       timedemo_enabled,
       status
     );

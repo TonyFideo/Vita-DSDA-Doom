@@ -21,6 +21,11 @@ const char *Vita_PWADNameAt(int index);
 int Vita_SelectedPWADIndex(void);
 void Vita_SelectPWAD(int index);
 
+/* DEH/BEX patches discovered in the PWADs folders. */
+int Vita_DEHCount(void);
+const char *Vita_DEHPathAt(int index);
+const char *Vita_DEHNameAt(int index);
+
 /* Returned string belongs to the zone allocator and must be Z_Free'd. */
 char *Vita_FindAutoIWAD(void);
 

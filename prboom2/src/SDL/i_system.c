@@ -89,6 +89,7 @@
 
 #ifdef __vita__
 #include "vita/vita_system.h"
+#include "vita/vita_path.h"
 #endif
 
 void I_uSleep(unsigned long usecs)
@@ -606,6 +607,37 @@ char* I_FindFileInternal(const char* wfname, const char* ext, dboolean isStatic)
 
   /* Precalculate a length we will need in the loop */
   pl = strlen(wfname) + (ext ? strlen(ext) : 0) + 4;
+
+#ifdef __vita__
+  /*
+   * A device-qualified name ("ux0:/data/x.wad") is already absolute. Joining it
+   * to a search directory yields "app0:/ux0:/data/x.wad", which only resolves
+   * because Vita3K drops the duplicate device. Try the name as given first;
+   * if it is not found, fall through to the normal search unchanged.
+   */
+  if (Vita_IsDevicePath(wfname))
+  {
+    size_t p_size = PATH_MAX;
+
+    if (!isStatic)
+    {
+      p_size = pl;
+      p = (char*)Z_Malloc(p_size);
+    }
+
+    snprintf(p, p_size, "%s", wfname);
+
+    if (ext && !M_FileExists(p) && strlen(p) + strlen(ext) < p_size)
+      strcat(p, ext);
+    if (M_FileExists(p)) {
+      if (!isStatic)
+        lprintf(LO_DEBUG, " found %s\n", p);
+      return p;
+    }
+    if (!isStatic)
+      Z_Free(p);
+  }
+#endif
 
   for (i = 0; i < num_search; i++) {
     const char  * d = NULL;
